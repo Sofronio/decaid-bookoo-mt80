@@ -134,6 +134,14 @@ stream at 5 Hz. `getSettings`, `getSections`, and `getPresets` returned the
 grinder's real configuration, including section and preset names in Chinese —
 which exercises the UTF-8 path across fragment boundaries on the wire.
 
+Writes were exercised against the same unit and restored afterwards. Writing
+the current settings back is accepted and echoed, and changing `brightness`
+propagated to both `getSettings` and the live `periodInfo` stream before being
+restored; a final field-by-field comparison against a pre-test backup matched
+exactly, the preset list was unchanged, and the recycle bin stayed empty.
+Preset add and delete are left untested on purpose — deletion leaves a tombstone
+the protocol offers no way to purge.
+
 The protocol follows Bookoo's published
 [open-scale-protocol](https://github.com/BooKooCode/OpenSource/tree/main/bookoo_motto80)
 MT80 BLE GATT SDK (minimum firmware `v1.2.19.0820`).
