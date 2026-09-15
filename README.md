@@ -103,6 +103,42 @@ Available through `POST /api/v1/sensors/:id/execute`.
 it reproduces the published test vector
 `ae8f0ec693f96e37140fc424ab5df303`.
 
+## Control page
+
+The plugin serves a live control page at
+`/api/v1/plugins/bookoo-mt80.reaplugin/ui`, reachable through an `api` entry of
+type `http`:
+
+```
+GET  /api/v1/plugins/bookoo-mt80.reaplugin/ui            -> the page
+GET  /api/v1/plugins/bookoo-mt80.reaplugin/ui?state=1    -> cached JSON state
+POST /api/v1/plugins/bookoo-mt80.reaplugin/ui            -> {commandId, params}
+```
+
+The page mirrors the in-app grinder debug view: a large grind-size readout with
+feed and grind RPM, a live status table, draggable sliders that send on a 250 ms
+debounce, boolean toggles, preset and section chips, and a per-kind send,
+response, and broadcast log. It toggles between English and Chinese.
+
+It drives **the same command surface** the Sensor API exposes — the sliders post
+`setSettings`, the preset chips post `setSettings {selectPreset}`, and the
+section chips post `setSettings {bladeGap}`. The HTTP layer is transport only,
+not a second vocabulary.
+
+Polling reads the cached `periodInfo` and never touches the device, because the
+driver keeps one request in flight and a polling request would block real
+commands. The sliders use the **published** `geneSetting` ranges rather than the
+reference GUI's wider ones, since the device rejects anything outside them.
+
+`handleHttpRequest` must be defined on the object `createPlugin` returns, not on
+the device the driver factory returns; the loader aliases it from there. The
+page itself is device-independent, so it renders before any MT80 binds and just
+reports "not connected".
+
+A section chip writes only the grind-size value for that range. It does not move
+the physical burr: Bookoo's guide states the MT80 adjusts manually, and that
+writing `bladeGap` does not change the physical gap.
+
 ## Out of scope
 
 Grinding start and stop is **not implemented**. Bookoo's integration guide lists
