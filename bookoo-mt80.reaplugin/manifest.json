@@ -1,9 +1,9 @@
 {
   "id": "bookoo-mt80.reaplugin",
-  "name": "Bookoo MT80 Grinder (Reference)",
+  "name": "Bookoo MT80 Grinder",
   "author": "Decaid contributors",
   "description": "Opt-in Bookoo MT80 grinder protocol using host-owned BLE, exposed as a Sensor.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 1,
   "permissions": ["transport.ble", "api"],
   "drivers": [{
