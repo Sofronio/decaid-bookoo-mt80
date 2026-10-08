@@ -139,6 +139,23 @@ A section chip writes only the grind-size value for that range. It does not move
 the physical burr: Bookoo's guide states the MT80 adjusts manually, and that
 writing `bladeGap` does not change the physical gap.
 
+## Simulated device
+
+For skin development without hardware, turn on the `mockDevice` plugin setting:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/bookoo-mt80.reaplugin/settings \
+  -H 'Content-Type: application/json' -d '{"mockDevice": true}'
+```
+
+Decaid reloads the plugin and a sensor named "Bookoo MT80 (simulated)" appears
+as connected (`plugin:bookoo-mt80.reaplugin:mt80:simulated`), alongside any real
+MT80. It publishes the same 13 channels once a second and accepts
+`setSettings` with the same ranges, type checks and `selectPreset` behaviour as
+the device. `getSettings`, `getPresets`, `getSections` and `getRecycleBin` work;
+the preset and section editing commands report that they are unsupported. State
+is in memory and resets on reload. The setting defaults to off.
+
 ## Out of scope
 
 Grinding start and stop is **not implemented**. Bookoo's integration guide lists
