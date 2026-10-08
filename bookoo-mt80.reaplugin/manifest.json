@@ -11,7 +11,14 @@
     "type": "sensor",
     "ble": {"match": {"name": {"contains": "mt80"}}}
   }],
-  "settings": {},
+  "settings": {
+    "mockDevice": {
+      "type": "boolean",
+      "label": "Simulated MT80",
+      "description": "Register an in-memory MT80 for testing skins without hardware. Takes effect when the plugin loads.",
+      "default": false
+    }
+  },
   "api": [
     { "id": "ui", "type": "http", "data": {} }
   ]

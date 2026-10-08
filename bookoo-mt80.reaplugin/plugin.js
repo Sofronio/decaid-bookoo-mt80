@@ -349,10 +349,241 @@ function createPlugin(host) {
     ].join("");
   }
 
+  const dataChannels = [
+    { key: "feedingRpm", type: "integer", unit: "rpm" },
+    { key: "bladeGap", type: "integer", unit: "um" },
+    { key: "grindRpm", type: "integer", unit: "rpm" },
+    { key: "humidity", type: "integer", unit: "%RH" },
+    { key: "devState", type: "string" },
+    { key: "netState", type: "string" },
+    { key: "totalGrinds", type: "integer" },
+    { key: "cupDetect", type: "boolean" },
+    { key: "autoStop", type: "boolean" },
+    { key: "fastClean", type: "boolean" },
+    { key: "brightness", type: "integer" },
+    { key: "standbySec", type: "integer" },
+    { key: "selectPreset", type: "integer" },
+  ];
+
+  const commands = [
+    {
+      id: "getSettings",
+      name: "Read general settings",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "setSettings",
+      name: "Write general settings",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "getSections",
+      name: "Read grinding sections",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "array" },
+    },
+    {
+      id: "setSections",
+      name: "Write grinding sections",
+      paramsSchema: {
+        type: "object",
+        properties: { sections: { type: "array" } },
+      },
+      resultsSchema: { type: "array" },
+    },
+    {
+      id: "getPresets",
+      name: "Read presets",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "array" },
+    },
+    {
+      id: "addPreset",
+      name: "Add a preset",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "updatePreset",
+      name: "Edit a preset",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "deletePreset",
+      name: "Delete a preset",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "restorePreset",
+      name: "Restore a deleted preset",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "reorderPreset",
+      name: "Reorder a preset",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "object" },
+    },
+    {
+      id: "importPresets",
+      name: "Import presets",
+      paramsSchema: {
+        type: "object",
+        properties: { presets: { type: "array" } },
+      },
+      resultsSchema: { type: "array" },
+    },
+    {
+      id: "getRecycleBin",
+      name: "Read the preset recycle bin",
+      paramsSchema: { type: "object" },
+      resultsSchema: { type: "array" },
+    },
+  ];
+
   // The loader aliases `handleHttpRequest` on the object `createPlugin`
   // returns, not on the device the driver factory returns, so the driver
   // publishes its handler here.
   let deviceHandler = null;
+
+  // Simulated MT80 (opt-in via the `mockDevice` setting): registers a
+  // non-BLE sensor with the same channels and commands so skins and the
+  // control page can be exercised without hardware. State is in memory only.
+  const simRanges = {
+    feedingRpm: [10, 65],
+    grindRpm: [500, 1500],
+    bladeGap: [0, 999],
+    brightness: [1, 5],
+    standbySec: [60, 900],
+  };
+  const simBools = ["cupDetect", "autoStop", "fastClean"];
+  const simTickMs = 1000;
+
+  async function registerSimulatedDevice() {
+    const state = {
+      feedingRpm: 40,
+      bladeGap: 350,
+      grindRpm: 1000,
+      humidity: 45,
+      devState: "IDLE",
+      netState: "CONNECTED",
+      totalGrinds: 128,
+      cupDetect: false,
+      autoStop: true,
+      fastClean: false,
+      brightness: 3,
+      standbySec: 300,
+      selectPreset: 1,
+    };
+    const presets = [
+      { index: 1, name: "Espresso", note: "", bladeGap: 350, feedingRpm: 40, grindRpm: 1000 },
+      { index: 2, name: "Filter", note: "", bladeGap: 600, feedingRpm: 45, grindRpm: 1200 },
+    ];
+    const sections = [
+      { name: "Espresso", range: [250, 450] },
+      { name: "Filter", range: [500, 800] },
+    ];
+    let handle = null;
+    let stopped = false;
+
+    function publish() {
+      if (handle) handle.publish({ ...state });
+    }
+
+    function applySettings(input) {
+      const next = {};
+      for (const key of Object.keys(input)) {
+        if (key === "selectPreset") {
+          const preset = presets.find((p) => p.index === input[key]);
+          if (!preset) throw new Error(`No preset ${input[key]}`);
+          next.selectPreset = preset.index;
+          next.bladeGap = preset.bladeGap;
+          next.feedingRpm = preset.feedingRpm;
+          next.grindRpm = preset.grindRpm;
+        } else if (simRanges[key]) {
+          const value = input[key];
+          const [min, max] = simRanges[key];
+          if (!Number.isInteger(value) || value < min || value > max) {
+            throw new Error(`${key} out of range ${min}-${max}`);
+          }
+          next[key] = value;
+        } else if (simBools.includes(key)) {
+          if (typeof input[key] !== "boolean") throw new Error(`${key} must be boolean`);
+          next[key] = input[key];
+        } else {
+          throw new Error(`Unknown MT80 setting: ${key}`);
+        }
+      }
+      Object.assign(state, next);
+      publish();
+      return { ...state };
+    }
+
+    async function execute({ commandId, params }) {
+      switch (commandId) {
+        case "getSettings":
+          return { ...state };
+        case "setSettings":
+          return applySettings(params || {});
+        case "getSections":
+          return { sections: sections.map((s) => ({ ...s })) };
+        case "getPresets":
+          return { presets: presets.map((p) => ({ ...p })) };
+        case "getRecycleBin":
+          return { deleted: [] };
+        default:
+          throw new Error(`${commandId} is not supported by the simulated MT80`);
+      }
+    }
+
+    // Chained setTimeout rather than setInterval, so a stopped device
+    // cannot leave a timer behind.
+    function tick() {
+      if (stopped) return;
+      publish();
+      setTimeout(tick, simTickMs);
+    }
+
+    handle = await host.devices.register(
+      {
+        driverId: "mt80",
+        instanceId: "simulated",
+        name: "Bookoo MT80 (simulated)",
+        vendor: "Bookoo",
+        dataChannels,
+        commands,
+      },
+      {
+        async connect() {},
+        async disconnect() {
+          stopped = true;
+        },
+        execute,
+      }
+    );
+    deviceHandler = {
+      state: () => ({
+        connected: !stopped,
+        snapshot: { ...state },
+        baseInfo: { snCode: "SIMULATED" },
+        logs: [],
+      }),
+      post: async (body) => {
+        try {
+          return { ok: true, result: await execute({ commandId: body.commandId, params: body.params || {} }) };
+        } catch (error) {
+          return { ok: false, error: String(error && error.message ? error.message : error) };
+        }
+      },
+    };
+    publish();
+    setTimeout(tick, simTickMs);
+  }
 
   return {
     id: "bookoo-mt80.reaplugin",
@@ -392,8 +623,12 @@ function createPlugin(host) {
         body: JSON.stringify({ ok: false, error: "method not allowed" }),
       };
     },
-    onLoad() {
-      return host.devices.bindDriver("mt80", {
+    onLoad(settings) {
+      const simulated =
+        settings && settings.mockDevice === true
+          ? registerSimulatedDevice()
+          : Promise.resolve();
+      const bound = host.devices.bindDriver("mt80", {
         create(device) {
           let context = null;
           let sequence = 0;
@@ -564,103 +799,6 @@ function createPlugin(host) {
             }
             rxState = null;
           }
-
-          const dataChannels = [
-            { key: "feedingRpm", type: "integer", unit: "rpm" },
-            { key: "bladeGap", type: "integer", unit: "um" },
-            { key: "grindRpm", type: "integer", unit: "rpm" },
-            { key: "humidity", type: "integer", unit: "%RH" },
-            { key: "devState", type: "string" },
-            { key: "netState", type: "string" },
-            { key: "totalGrinds", type: "integer" },
-            { key: "cupDetect", type: "boolean" },
-            { key: "autoStop", type: "boolean" },
-            { key: "fastClean", type: "boolean" },
-            { key: "brightness", type: "integer" },
-            { key: "standbySec", type: "integer" },
-            { key: "selectPreset", type: "integer" },
-          ];
-
-          const commands = [
-            {
-              id: "getSettings",
-              name: "Read general settings",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "setSettings",
-              name: "Write general settings",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "getSections",
-              name: "Read grinding sections",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "setSections",
-              name: "Write grinding sections",
-              paramsSchema: {
-                type: "object",
-                properties: { sections: { type: "array" } },
-              },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "getPresets",
-              name: "Read presets",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "addPreset",
-              name: "Add a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "updatePreset",
-              name: "Edit a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "deletePreset",
-              name: "Delete a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "restorePreset",
-              name: "Restore a deleted preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "reorderPreset",
-              name: "Reorder a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "importPresets",
-              name: "Import presets",
-              paramsSchema: {
-                type: "object",
-                properties: { presets: { type: "array" } },
-              },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "getRecycleBin",
-              name: "Read the preset recycle bin",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-          ];
 
           function presetSelector(uid) {
             return { type: "uid", value: uid };
@@ -842,6 +980,13 @@ function createPlugin(host) {
           };
         },
       });
+      // A failing simulator must not take the real BLE driver down with it.
+      return Promise.all([
+        bound,
+        simulated.catch((error) => {
+          console.warn("Simulated MT80 failed to register:", error);
+        }),
+      ]).then(() => undefined);
     },
   };
 }
