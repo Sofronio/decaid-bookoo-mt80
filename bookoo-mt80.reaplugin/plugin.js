@@ -532,15 +532,12 @@ function createPlugin(host) {
               }
               const info = message.broadcast.periodInfo;
               if (!info) return;
-              if (handshake) {
-                const current = handshake;
-                handshake = null;
-                clearTimeout(current.timer);
-                current.resolve();
-              }
               snapshot = { ...info };
               log("broadcast", json);
-              context.publish({ ...info });
+              publishSnapshot().then(
+                () => settleReady(null),
+                (error) => settleReady(error)
+              );
               return;
             }
             if (message.response) {
@@ -556,117 +553,58 @@ function createPlugin(host) {
               clearTimeout(current.timer);
               current.reject(reason);
             }
-            const waiting = handshake;
-            handshake = null;
-            if (waiting) {
-              clearTimeout(waiting.timer);
-              waiting.reject(reason);
-            }
+            settleReady(reason);
             rxState = null;
           }
 
-          const dataChannels = [
-            { key: "feedingRpm", type: "integer", unit: "rpm" },
-            { key: "bladeGap", type: "integer", unit: "um" },
-            { key: "grindRpm", type: "integer", unit: "rpm" },
-            { key: "humidity", type: "integer", unit: "%RH" },
-            { key: "devState", type: "string" },
-            { key: "netState", type: "string" },
-            { key: "totalGrinds", type: "integer" },
-            { key: "cupDetect", type: "boolean" },
-            { key: "autoStop", type: "boolean" },
-            { key: "fastClean", type: "boolean" },
-            { key: "brightness", type: "integer" },
-            { key: "standbySec", type: "integer" },
-            { key: "selectPreset", type: "integer" },
-          ];
+          // The device state vocabulary is its own; only these four reach the
+          // host. Anything else is honestly unknown rather than guessed.
+          const grinderStates = {
+            IDLE: "idle",
+            GRINDING: "grinding",
+            HIGHSPEEDCLEAN: "grinding",
+            WARNING: "error",
+          };
 
-          const commands = [
-            {
-              id: "getSettings",
-              name: "Read general settings",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "setSettings",
-              name: "Write general settings",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "getSections",
-              name: "Read grinding sections",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "setSections",
-              name: "Write grinding sections",
-              paramsSchema: {
-                type: "object",
-                properties: { sections: { type: "array" } },
-              },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "getPresets",
-              name: "Read presets",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "addPreset",
-              name: "Add a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "updatePreset",
-              name: "Edit a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "deletePreset",
-              name: "Delete a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "restorePreset",
-              name: "Restore a deleted preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "reorderPreset",
-              name: "Reorder a preset",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "object" },
-            },
-            {
-              id: "importPresets",
-              name: "Import presets",
-              paramsSchema: {
-                type: "object",
-                properties: { presets: { type: "array" } },
-              },
-              resultsSchema: { type: "array" },
-            },
-            {
-              id: "getRecycleBin",
-              name: "Read the preset recycle bin",
-              paramsSchema: { type: "object" },
-              resultsSchema: { type: "array" },
-            },
-          ];
+          function publishSnapshot() {
+            if (!context || !snapshot) return Promise.resolve();
+            const payload = {
+              state:
+                grinderStates[String(snapshot.devState || "").toUpperCase()] ||
+                "unknown",
+            };
+            if (snapshot.bladeGap !== undefined) {
+              payload.setting = String(snapshot.bladeGap);
+            }
+            if (snapshot.grindRpm !== undefined) {
+              payload.rpm = snapshot.grindRpm;
+            }
+            return Promise.resolve(context.publish(payload)).catch((error) => {
+              log(
+                "error",
+                "publish: " +
+                  String(error && error.message ? error.message : error)
+              );
+              throw error;
+            });
+          }
+
+          // Readiness is a publication, not an arrival: the host requires a
+          // valid initial snapshot before the grinder is usable.
+          function settleReady(error) {
+            const current = handshake;
+            if (!current) return;
+            handshake = null;
+            clearTimeout(current.timer);
+            if (error) current.reject(error);
+            else current.resolve();
+          }
 
           function presetSelector(uid) {
             return { type: "uid", value: uid };
           }
 
-          async function execute({ commandId, params }) {
+          async function runCommand({ commandId, params }) {
             const input = params || {};
             switch (commandId) {
               case "getSettings":
@@ -781,7 +719,7 @@ function createPlugin(host) {
           // the HTTP layer is transport only, not a second vocabulary.
           async function handlePost(body) {
             try {
-              const result = await execute({
+              const result = await runCommand({
                 commandId: body.commandId,
                 params: body.params || {},
               });
@@ -796,10 +734,19 @@ function createPlugin(host) {
 
           deviceHandler = { state: uiState, post: handlePost };
 
+          function writeSetting(data) {
+            return request("geneSetting", { op: "set", data });
+          }
+
+          function numeric(value, label) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+              throw new Error(`MT80 ${label} must be numeric`);
+            }
+            return Math.round(parsed);
+          }
+
           return {
-            vendor: "Bookoo",
-            dataChannels,
-            commands,
             async connect(session) {
               const services = await session.gatt.discoverServices();
               if (!services.includes(service)) {
@@ -838,7 +785,13 @@ function createPlugin(host) {
               abortPending(new Error("MT80 disconnected"));
               context = null;
             },
-            execute,
+            bleEvent() {},
+            async setGrindSetting(setting) {
+              await writeSetting({ bladeGap: numeric(setting, "grind setting") });
+            },
+            async setRpm(rpm) {
+              await writeSetting({ grindRpm: numeric(rpm, "rpm") });
+            },
           };
         },
       });

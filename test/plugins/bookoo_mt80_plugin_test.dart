@@ -1,8 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:reaprime/src/models/device/sensor.dart';
+import 'package:reaprime/src/models/device/grinder_device.dart';
 import 'package:reaprime/src/plugins/plugin_ble_registry.dart';
+import 'package:reaprime/src/plugins/plugin_grinder.dart';
 import 'package:reaprime/src/plugins/plugin_manager.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
 
@@ -12,7 +13,7 @@ import 'plugin_test_helpers.dart';
 BleAdvertisementEvidence mt80Evidence() =>
     BleAdvertisementEvidence(name: 'BOOKOO MT80 12345678');
 
-Future<Sensor> createMt80Sensor(
+Future<PluginGrinder> createMt80Grinder(
   PluginManager manager,
   BookooMt80PluginTransport transport, {
   BleAdvertisementEvidence? evidence,
@@ -25,27 +26,28 @@ Future<Sensor> createMt80Sensor(
         admit: () => true,
         createTransport: () => transport,
       )
-      as Sensor;
+      as PluginGrinder;
 }
 
-Future<Sensor> connectMt80(
+/// Connect reaches readiness only once a valid snapshot is published, so the
+/// broadcast has to land while `onConnect` is still pending.
+Future<PluginGrinder> connectMt80(
   PluginManager manager,
-  BookooMt80PluginTransport transport,
-) async {
-  final sensor = await createMt80Sensor(manager, transport);
-  final connect = sensor.onConnect();
+  BookooMt80PluginTransport transport, {
+  Map<String, dynamic>? periodInfo,
+}) async {
+  final grinder = await createMt80Grinder(manager, transport);
+  final connect = grinder.onConnect();
   await transport.subscribed.future;
-  transport.emitBroadcast(mt80PeriodInfo());
+  transport.emitBroadcast(periodInfo ?? mt80PeriodInfo());
   await connect;
-  return sensor;
+  return grinder;
 }
 
 List<List<int>> writtenFrames(BookooMt80PluginTransport transport) =>
     transport.writes.map((write) => write.data.toList()).toList();
 
-/// Drives the plugin's HTTP handler through the same seam the web server uses:
-/// the loader aliases `handleHttpRequest` off the object `createPlugin`
-/// returns, then dispatches one request per correlation id.
+/// Drives the plugin's HTTP handler through the same seam the web server uses.
 Future<Map<String, dynamic>> pluginHttp(
   PluginManager manager, {
   String method = 'GET',
@@ -69,29 +71,152 @@ Future<Map<String, dynamic>> pluginHttp(
 }
 
 void main() {
-  test('MT80 manifest declares a sensor driver with channels and commands', () {
-    final manifest = bookooMt80Manifest();
-    final driver = manifest.drivers.single;
+  test('MT80 manifest declares a grinder driver with its controls', () {
+    final driver = bookooMt80Manifest().drivers.single;
     expect(driver.id, 'mt80');
-    expect(driver.type, PluginDriverType.sensor);
-    // The MT80 does not advertise its custom service, so the matcher may only
-    // rely on the advertised name.
+    expect(driver.type, PluginDriverType.grinder);
+    // Bookoo lists grinding start/stop as under safety evaluation, so the
+    // driver declares the two controls the published protocol documents.
+    expect(driver.grinderCapabilities, {
+      PluginGrinderCapability.grindSetting,
+      PluginGrinderCapability.rpmControl,
+    });
+    expect(driver.controls['grindSetting']!.kind, 'numeric');
+    expect(driver.controls['grindSetting']!.max, 999);
+    expect(driver.controls['rpmControl']!.min, 500);
+    expect(driver.controls['rpmControl']!.max, 1500);
+    // The advertised name is the only discriminator available.
     expect(driver.ble!.serviceUuids, isNull);
     expect(driver.ble!.nameValue, 'mt80');
   });
 
+  test('MT80 exposes its control page as the settings surface', () {
+    final driver = bookooMt80Manifest().drivers.single;
+    expect(driver.surfaces.single.id, 'settings');
+    expect(driver.surfaces.single.role, 'settings');
+    expect(driver.surfaces.single.endpoint, 'ui');
+  });
+
   test(
-    'MT80 connect subscribes, handshakes, and waits for periodInfo',
+    'MT80 connect publishes an initial snapshot before it is ready',
     () async {
       final manager = PluginManager(kvStore: FakeKeyValueStoreService());
       addTearDown(manager.dispose);
       await loadBookooMt80Plugin(manager);
       final transport = BookooMt80PluginTransport('AA:BB');
-      final sensor = await connectMt80(manager, transport);
-      expect(transport.discoverServicesCalls, 1);
-      final handshake = mt80DecodeWrites(writtenFrames(transport));
-      expect(handshake, ['{"request":{"appHello":{"op":"handshake"}}}']);
-      await sensor.disconnect();
+      final grinder = await createMt80Grinder(manager, transport);
+      final snapshots = <GrinderSnapshot>[];
+      final subscription = grinder.currentSnapshot.listen(snapshots.add);
+      addTearDown(subscription.cancel);
+      final connect = grinder.onConnect();
+      await transport.subscribed.future;
+      transport.emitBroadcast(mt80PeriodInfo());
+      await connect;
+      expect(snapshots, isNotEmpty);
+      expect(snapshots.last.state, GrinderState.idle);
+      await grinder.disconnect();
+    },
+  );
+
+  test(
+    'MT80 maps the device state, grind size and RPM into the snapshot',
+    () async {
+      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+      addTearDown(manager.dispose);
+      await loadBookooMt80Plugin(manager);
+      final transport = BookooMt80PluginTransport('AA:BB');
+      final grinder = await createMt80Grinder(manager, transport);
+      final snapshots = <GrinderSnapshot>[];
+      final subscription = grinder.currentSnapshot.listen(snapshots.add);
+      addTearDown(subscription.cancel);
+      final connect = grinder.onConnect();
+      await transport.subscribed.future;
+      transport.emitBroadcast(
+        mt80PeriodInfo(devState: 'GRINDING', bladeGap: 321, grindRpm: 812),
+      );
+      await connect;
+      expect(snapshots.last.state, GrinderState.grinding);
+      expect(snapshots.last.setting, '321');
+      expect(snapshots.last.rpm, 812);
+      await grinder.disconnect();
+    },
+  );
+
+  test(
+    'MT80 reports a warning state as an error and anything else as unknown',
+    () async {
+      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+      addTearDown(manager.dispose);
+      await loadBookooMt80Plugin(manager);
+      final transport = BookooMt80PluginTransport('AA:BB');
+      final grinder = await connectMt80(
+        manager,
+        transport,
+        periodInfo: mt80PeriodInfo(devState: 'WARNING'),
+      );
+      expect((await grinder.currentSnapshot.first).state, GrinderState.error);
+      transport.emitBroadcast(
+        mt80PeriodInfo(devState: 'BootGuide'),
+        sequence: 2,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect((await grinder.currentSnapshot.first).state, GrinderState.unknown);
+      await grinder.disconnect();
+    },
+  );
+
+  test('MT80 setRpm writes the documented geneSetting frame', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager);
+    final transport = BookooMt80PluginTransport('AA:BB');
+    final grinder = await connectMt80(manager, transport);
+    transport.writes.clear();
+    final pending = grinder.setRpm(1000);
+    expect(await transport.awaitRequests(), [
+      '{"request":{"geneSetting":{"op":"set","data":{"grindRpm":1000}}}}',
+    ]);
+    transport.emitJson(
+      jsonEncode({
+        'response': {
+          'geneSetting': {
+            'result': 'success',
+            'data': {'grindRpm': 1000},
+          },
+        },
+      }),
+      sequence: 2,
+    );
+    await pending;
+    await grinder.disconnect();
+  });
+
+  test(
+    'MT80 setGrindSetting writes the documented geneSetting frame',
+    () async {
+      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+      addTearDown(manager.dispose);
+      await loadBookooMt80Plugin(manager);
+      final transport = BookooMt80PluginTransport('AA:BB');
+      final grinder = await connectMt80(manager, transport);
+      transport.writes.clear();
+      final pending = grinder.setGrindSetting('420');
+      expect(await transport.awaitRequests(), [
+        '{"request":{"geneSetting":{"op":"set","data":{"bladeGap":420}}}}',
+      ]);
+      transport.emitJson(
+        jsonEncode({
+          'response': {
+            'geneSetting': {
+              'result': 'success',
+              'data': {'bladeGap': 420},
+            },
+          },
+        }),
+        sequence: 2,
+      );
+      await pending;
+      await grinder.disconnect();
     },
   );
 
@@ -100,170 +225,9 @@ void main() {
     addTearDown(manager.dispose);
     await loadBookooMt80Plugin(manager);
     final transport = BookooMt80PluginTransport('AA:BB', servicePresent: false);
-    final sensor = await createMt80Sensor(manager, transport);
-    await expectLater(sensor.onConnect(), throwsA(anything));
+    final grinder = await createMt80Grinder(manager, transport);
+    await expectLater(grinder.onConnect(), throwsA(anything));
     expect(transport.subscribed.isCompleted, isFalse);
-  });
-
-  test('MT80 periodInfo publishes every declared channel', () async {
-    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-    addTearDown(manager.dispose);
-    await loadBookooMt80Plugin(manager);
-    final transport = BookooMt80PluginTransport('AA:BB');
-    final sensor = await createMt80Sensor(manager, transport);
-    final samples = <Map<String, dynamic>>[];
-    final subscription = sensor.data.listen(samples.add);
-    addTearDown(subscription.cancel);
-    final connect = sensor.onConnect();
-    await transport.subscribed.future;
-    transport.emitBroadcast(mt80PeriodInfo(grindRpm: 812, bladeGap: 321));
-    await connect;
-    expect(samples, isNotEmpty);
-    expect(samples.first['grindRpm'], 812);
-    expect(samples.first['bladeGap'], 321);
-    expect(samples.first['devState'], 'IDLE');
-    expect(samples.first.keys.toSet(), mt80PeriodInfo().keys.toSet());
-    await sensor.disconnect();
-  });
-
-  test('MT80 reassembles a broadcast split across notifications', () async {
-    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-    addTearDown(manager.dispose);
-    await loadBookooMt80Plugin(manager);
-    final transport = BookooMt80PluginTransport('AA:BB');
-    final sensor = await createMt80Sensor(manager, transport);
-    final samples = <Map<String, dynamic>>[];
-    final subscription = sensor.data.listen(samples.add);
-    addTearDown(subscription.cancel);
-    final connect = sensor.onConnect();
-    await transport.subscribed.future;
-    // Four fragments of 12 bytes each: the default ATT MTU envelope.
-    transport.emitBroadcast(mt80PeriodInfo(selectPreset: 7, humidity: 44));
-    await connect;
-    expect(samples.first['selectPreset'], 7);
-    expect(samples.first['humidity'], 44);
-    await sensor.disconnect();
-  });
-
-  test('MT80 ignores a notification that is not a valid frame', () async {
-    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-    addTearDown(manager.dispose);
-    await loadBookooMt80Plugin(manager);
-    final transport = BookooMt80PluginTransport('AA:BB');
-    final sensor = await createMt80Sensor(manager, transport);
-    final samples = <Map<String, dynamic>>[];
-    final subscription = sensor.data.listen(samples.add);
-    addTearDown(subscription.cancel);
-    final connect = sensor.onConnect();
-    await transport.subscribed.future;
-    transport.emitFrame([0x00, 0x01, 0x02, 0x03]);
-    transport.emitFrame([0xA5, 0x02]);
-    expect(samples, isEmpty);
-    transport.emitBroadcast(mt80PeriodInfo());
-    await connect;
-    expect(samples, hasLength(1));
-    await sensor.disconnect();
-  });
-
-  test(
-    'MT80 getSettings sends the documented request and resolves on response',
-    () async {
-      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-      addTearDown(manager.dispose);
-      await loadBookooMt80Plugin(manager);
-      final transport = BookooMt80PluginTransport('AA:BB');
-      final sensor = await connectMt80(manager, transport);
-      transport.writes.clear();
-      final result = sensor.execute('getSettings', {});
-      expect(await transport.awaitRequests(), [
-        '{"request":{"geneSetting":{"op":"get","selector":{"type":"all"}}}}',
-      ]);
-      transport.emitJson(
-        jsonEncode({
-          'response': {
-            'geneSetting': {
-              'result': 'success',
-              'data': {'feedingRpm': 65, 'bladeGap': 500},
-            },
-          },
-        }),
-        sequence: 2,
-      );
-      expect(await result, {'feedingRpm': 65, 'bladeGap': 500});
-      await sensor.disconnect();
-    },
-  );
-
-  test('MT80 surfaces a device failure response as an error', () async {
-    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-    addTearDown(manager.dispose);
-    await loadBookooMt80Plugin(manager);
-    final transport = BookooMt80PluginTransport('AA:BB');
-    final sensor = await connectMt80(manager, transport);
-    final result = sensor.execute('setSettings', {'feedingRpm': 999});
-    await transport.awaitRequests();
-    transport.emitJson(
-      jsonEncode({
-        'response': {
-          'geneSetting': {
-            'result': 'fail',
-            'error': {
-              'code': 'OUT_OF_RANGE',
-              'message': 'feedingRpm out of range',
-              'field': 'feedingRpm',
-            },
-          },
-        },
-      }),
-      sequence: 2,
-    );
-    await expectLater(result, throwsA(anything));
-  });
-
-  test(
-    'MT80 addPreset generates the published UID when none is supplied',
-    () async {
-      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-      addTearDown(manager.dispose);
-      await loadBookooMt80Plugin(manager);
-      final transport = BookooMt80PluginTransport('AA:BB');
-      final sensor = await connectMt80(manager, transport);
-      transport.writes.clear();
-      final result = sensor.execute('addPreset', {
-        'uid': bookooMt80UidVector,
-        'index': 0,
-        'name': 'Espresso',
-        'bladeGap': 180,
-        'feedingRpm': 62,
-        'grindRpm': 1100,
-      });
-      final request = (await transport.awaitRequests()).single;
-      expect(request, contains(bookooMt80UidVector));
-      expect(request, contains('"op":"add"'));
-      transport.emitJson(
-        jsonEncode({
-          'response': {
-            'grindPreset': {
-              'result': 'success',
-              'data': {'uid': bookooMt80UidVector, 'index': 0},
-            },
-          },
-        }),
-        sequence: 2,
-      );
-      expect(await result, {'uid': bookooMt80UidVector, 'index': 0});
-      await sensor.disconnect();
-    },
-  );
-
-  test('MT80 advertisement without mt80 in the name is not claimed', () async {
-    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-    addTearDown(manager.dispose);
-    await loadBookooMt80Plugin(manager);
-    final decision = manager.bleService.registry.decide(
-      BleAdvertisementEvidence(name: 'BOOKOO Mini'),
-    );
-    expect(decision.drivers, isEmpty);
   });
 
   test('MT80 HTTP handler serves the control page', () async {
@@ -285,7 +249,7 @@ void main() {
       addTearDown(manager.dispose);
       await loadBookooMt80Plugin(manager);
       final transport = BookooMt80PluginTransport('AA:BB');
-      final sensor = await connectMt80(manager, transport);
+      final grinder = await connectMt80(manager, transport);
       transport.writes.clear();
       final response = await pluginHttp(manager, query: const {'state': '1'});
       final state =
@@ -295,10 +259,8 @@ void main() {
         (state['snapshot'] as Map<String, dynamic>)['grindRpm'],
         mt80PeriodInfo()['grindRpm'],
       );
-      // Polling must never reach the device: the driver allows one request in
-      // flight, so a polling request would block real commands.
       expect(transport.writes, isEmpty);
-      await sensor.disconnect();
+      await grinder.disconnect();
     },
   );
 
@@ -307,7 +269,7 @@ void main() {
     addTearDown(manager.dispose);
     await loadBookooMt80Plugin(manager);
     final transport = BookooMt80PluginTransport('AA:BB');
-    final sensor = await connectMt80(manager, transport);
+    final grinder = await connectMt80(manager, transport);
     transport.writes.clear();
     final pending = pluginHttp(
       manager,
@@ -333,29 +295,8 @@ void main() {
         jsonDecode(response['body'] as String) as Map<String, dynamic>;
     expect(payload['ok'], isTrue);
     expect((payload['result'] as Map)['feedingRpm'], 65);
-    await sensor.disconnect();
+    await grinder.disconnect();
   });
-
-  test(
-    'MT80 HTTP POST reports an unknown command instead of failing',
-    () async {
-      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
-      addTearDown(manager.dispose);
-      await loadBookooMt80Plugin(manager);
-      final transport = BookooMt80PluginTransport('AA:BB');
-      final sensor = await connectMt80(manager, transport);
-      final response = await pluginHttp(
-        manager,
-        method: 'POST',
-        body: const {'commandId': 'nope', 'params': <String, dynamic>{}},
-      );
-      final payload =
-          jsonDecode(response['body'] as String) as Map<String, dynamic>;
-      expect(payload['ok'], isFalse);
-      expect(payload['error'], contains('nope'));
-      await sensor.disconnect();
-    },
-  );
 
   test('MT80 HTTP handler rejects an unsupported method', () async {
     final manager = PluginManager(kvStore: FakeKeyValueStoreService());
@@ -363,5 +304,15 @@ void main() {
     await loadBookooMt80Plugin(manager);
     final response = await pluginHttp(manager, method: 'DELETE');
     expect(response['status'], 405);
+  });
+
+  test('MT80 advertisement without mt80 in the name is not claimed', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager);
+    final decision = manager.bleService.registry.decide(
+      BleAdvertisementEvidence(name: 'BOOKOO Mini'),
+    );
+    expect(decision.drivers, isEmpty);
   });
 }
