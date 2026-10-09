@@ -538,6 +538,10 @@ function createPlugin(host) {
                 () => settleReady(null),
                 (error) => settleReady(error)
               );
+              // The grinder snapshot carries only state, setting and rpm. The
+              // rest of periodInfo — feed RPM above all — has no slot in that
+              // contract, so it leaves through the plugin's own WebSocket.
+              host.emit("stream", { ...info });
               return;
             }
             if (message.response) {
