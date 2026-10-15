@@ -354,14 +354,131 @@ function createPlugin(host) {
   // publishes its handler here.
   let deviceHandler = null;
 
+  const rpmRange = { min: 500, max: 1500 };
+  const grindSteps = [10, 1];
+
+  // The skin draws these itself and runs only the actions it knows, so the
+  // answer stays within the documented kinds. The status line states the burr
+  // speed, which the Grind tile has no room for once it is showing the
+  // setting, and carries the RPM control; the pill coarsens the grind step,
+  // which the device only takes whole. The buttons stay up with no device
+  // bound, because the page reports that state itself.
+  function skinAnswer() {
+    const surface = deviceHandler ? deviceHandler.surface() : null;
+    const surfaces = [
+      {
+        id: "mt80-page",
+        kind: "header-button",
+        label: "MT80",
+        action: { type: "open", view: "main" },
+      },
+      {
+        id: "mt80-saver",
+        kind: "screensaver-button",
+        label: "MT80",
+        action: { type: "open", view: "main" },
+      },
+    ];
+    if (surface) {
+      const rpm = surface.rpm;
+      const line = {
+        id: "mt80-state",
+        kind: "tile-line",
+        tile: "grind",
+        text:
+          surface.state === "error"
+            ? "MT80 · warning"
+            : Number.isFinite(rpm)
+              ? "MT80 · " + rpm + " rpm"
+              : "MT80",
+        active: surface.state === "grinding",
+      };
+      if (Number.isFinite(rpm)) {
+        line.action = {
+          type: "call",
+          endpoint: "rpm",
+          field: "rpm",
+          input: {
+            title: "RPM",
+            unit: "rpm",
+            min: rpmRange.min,
+            max: rpmRange.max,
+            decimals: 0,
+            value: Math.min(Math.max(rpm, rpmRange.min), rpmRange.max),
+          },
+        };
+      }
+      // Deliberately no `tile-mode` on grind. A mode takes the tile's label
+      // slot, and the skin then stops drawing this line whatever option is
+      // selected -- `modeTiles.has(tile)` skips it at parse time, not on
+      // selection -- so a mode here would cost the status line for good. The
+      // line carries the RPM control instead: a tap opens the skin's own
+      // numpad, which calls the `rpm` endpoint.
+      surfaces.push(line);
+      // No `text`: the skin writes the pill from the size the user picked on
+      // this device, cycling between `±10` and `±1`. A `text` here would win
+      // over that and freeze the pill on one label.
+      surfaces.push({
+        id: "mt80-step",
+        kind: "tile-hint",
+        tile: "grind",
+        action: {
+          type: "stepsize",
+          field: "grinderSetting",
+          sizes: grindSteps,
+        },
+      });
+    }
+    return { version: 1, surfaces, live: { endpoint: "changed" } };
+  }
+
   return {
     id: "bookoo-mt80.reaplugin",
     handleHttpRequest(request) {
-      const json = (value) => ({
-        status: 200,
+      const json = (value, status) => ({
+        status: status === undefined ? 200 : status,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(value),
       });
+      // Decaid routes every declared endpoint to this one handler, so the
+      // endpoint id is the discriminator. Without it a skin read would fall
+      // through to the control page and never parse as an answer.
+      if (request.endpoint === "skin") {
+        if (request.method !== "GET") {
+          return json({ ok: false, error: "method not allowed" }, 405);
+        }
+        return json(skinAnswer());
+      }
+      if (request.endpoint === "rpm") {
+        if (request.method !== "POST") {
+          return json({ ok: false, error: "method not allowed" }, 405);
+        }
+        if (!deviceHandler) {
+          return json({ ok: false, error: "no MT80 device bound" }, 409);
+        }
+        // Anyone can POST here and the host's control validation is not in
+        // this path, so the range check is the only guard.
+        const rpm = Math.round(Number((request.body || {}).rpm));
+        if (!Number.isFinite(rpm) || rpm < rpmRange.min || rpm > rpmRange.max) {
+          return json({ ok: false, error: "rpm out of range" }, 400);
+        }
+        return Promise.resolve(
+          deviceHandler.post({
+            commandId: "setSettings",
+            params: { grindRpm: rpm },
+          })
+        ).then((result) =>
+          result && result.ok
+            ? json({ ok: true, rpm })
+            : json(
+                {
+                  ok: false,
+                  error: (result && result.error) || "MT80 rejected the rpm",
+                },
+                502
+              )
+        );
+      }
       if (request.method === "GET") {
         if (request.query && request.query.state === "1") {
           return json(
@@ -386,11 +503,7 @@ function createPlugin(host) {
           json
         );
       }
-      return {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ok: false, error: "method not allowed" }),
-      };
+      return json({ ok: false, error: "method not allowed" }, 405);
     },
     onLoad() {
       return host.devices.bindDriver("mt80", {
@@ -542,6 +655,7 @@ function createPlugin(host) {
               // rest of periodInfo — feed RPM above all — has no slot in that
               // contract, so it leaves through the plugin's own WebSocket.
               host.emit("stream", { ...info });
+              notifySkin();
               return;
             }
             if (message.response) {
@@ -570,13 +684,16 @@ function createPlugin(host) {
             WARNING: "error",
           };
 
+          function mappedState() {
+            return (
+              grinderStates[String(snapshot.devState || "").toUpperCase()] ||
+              "unknown"
+            );
+          }
+
           function publishSnapshot() {
             if (!context || !snapshot) return Promise.resolve();
-            const payload = {
-              state:
-                grinderStates[String(snapshot.devState || "").toUpperCase()] ||
-                "unknown",
-            };
+            const payload = { state: mappedState() };
             if (snapshot.bladeGap !== undefined) {
               payload.setting = String(snapshot.bladeGap);
             }
@@ -719,6 +836,52 @@ function createPlugin(host) {
             };
           }
 
+          // What the dashboard surfaces show, in the host's vocabulary rather
+          // than the device's. Null while nothing is bound, which is how the
+          // skin answer tells "connected" from "grind tile only".
+          function surfaceState() {
+            if (!context || !snapshot) return null;
+            return { state: mappedState(), rpm: Number(snapshot.grindRpm) };
+          }
+
+          // The skin holds the `changed` socket open and re-reads `skin` on
+          // every message, so a push goes out only when a value the surfaces
+          // actually show has moved, and never twice inside a second:
+          // periodInfo arrives at 5 Hz, and a stream at that rate would make
+          // the skin re-read itself three times a second forever. The body
+          // says only `skin` changed, because this driver never writes the
+          // workflow.
+          const skinPushIntervalMs = 1000;
+          let skinKey = "";
+          let skinTimer = null;
+          let skinSentAt = 0;
+
+          function notifySkin() {
+            const key =
+              context && snapshot
+                ? `on|${snapshot.devState}|${snapshot.grindRpm}`
+                : "off";
+            if (key === skinKey) return;
+            skinKey = key;
+            const wait = skinSentAt + skinPushIntervalMs - Date.now();
+            if (wait <= 0) {
+              if (skinTimer) {
+                clearTimeout(skinTimer);
+                skinTimer = null;
+              }
+              skinSentAt = Date.now();
+              host.emit("changed", { what: "skin" });
+              return;
+            }
+            // A push is already scheduled and would carry this state anyway.
+            if (skinTimer) return;
+            skinTimer = setTimeout(() => {
+              skinTimer = null;
+              skinSentAt = Date.now();
+              host.emit("changed", { what: "skin" });
+            }, wait);
+          }
+
           // The page drives the same command surface the Sensor API exposes;
           // the HTTP layer is transport only, not a second vocabulary.
           async function handlePost(body) {
@@ -736,7 +899,11 @@ function createPlugin(host) {
             }
           }
 
-          deviceHandler = { state: uiState, post: handlePost };
+          deviceHandler = {
+            state: uiState,
+            post: handlePost,
+            surface: surfaceState,
+          };
 
           function writeSetting(data) {
             return request("geneSetting", { op: "set", data });
@@ -775,6 +942,7 @@ function createPlugin(host) {
               session.gatt.onDisconnect(() => {
                 abortPending(new Error("MT80 disconnected"));
                 context = null;
+                notifySkin();
               });
               await session.gatt.subscribe(service, tx, (data) => {
                 const json = reassemble(data, Date.now());
@@ -788,6 +956,7 @@ function createPlugin(host) {
             disconnect() {
               abortPending(new Error("MT80 disconnected"));
               context = null;
+              notifySkin();
             },
             bleEvent() {},
             async setGrindSetting(setting) {

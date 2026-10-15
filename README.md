@@ -172,13 +172,73 @@ A section chip writes only the grind-size value for that range. It does not move
 the physical burr: Bookoo's guide states the MT80 adjusts manually, and that
 writing `bladeGap` does not change the physical gap.
 
-## Surfaces
+## Dashboard surfaces
 
-The manifest declares one surface, `settings`, pointing at the control page's
-own endpoint. Device management consumes it through
-`PluginDeviceSurfaceAuthority` and opens the page against `localhost` for that
-device, without requiring a connection first. The plugin owns identity
-validation; ownership is never inferred from the device ID.
+A skin on the Streamline plugin-surfaces protocol can draw a fixed set of UI
+pieces for a plugin that answers its `skin` endpoint, and runs only the actions
+it knows — no plugin code runs in the skin. The plugin answers
+`GET /api/v1/plugins/bookoo-mt80.reaplugin/skin` with what this grinder has to
+offer:
+
+| Surface | Kind | Where | Shows |
+| --- | --- | --- | --- |
+| `mt80-state` | `tile-line` | under the Grind label | the burr speed, or `warning`; drawn switched on while grinding, and a tap opens the skin's numpad to set it |
+| `mt80-step` | `tile-hint` | the Grind tile's pill | a coarse/fine `±10` / `±1` step for the grind setting |
+| `mt80-page` | `header-button` | the dashboard header | the control page |
+| `mt80-saver` | `screensaver-button` | over the screensaver | the control page |
+
+The line is where `rpmControl` lives, because the grinder snapshot carries one
+number and the tile spends it on the setting. It is a `line` and not a `hint`
+because a hint shares its slot with the pill, and the skin draws one of each per
+tile. `stepsize` is the one action that reaches the tile's own `-`/`+` without
+taking a slot the text needs.
+
+**No `tile-mode` on grind, on purpose.** A mode takes the tile's label slot, and
+the skin then stops drawing a `tile-line` on that tile *whatever option is
+selected* — `modeTiles.has(tile)` is decided when the answer is parsed, not when
+the user switches. Offering one would cost the status line permanently, and the
+only thing it would add here is `±` stepping for a number that is set once per
+bean. The line's `input` action reaches the same `rpm` endpoint.
+
+The pill carries no `text` of its own. The skin labels it from the size the
+user picked on that device, cycling `±10` and `±1`; a `text` in the answer takes
+precedence over that label and would freeze it.
+
+The buttons are drawn even with no device bound — the page reports "not
+connected" itself. The grind surfaces are not, because they would have nothing
+to say.
+
+### Keeping the skin in sync
+
+`live` in the same answer names the `changed` websocket. The skin holds it open
+and re-reads `skin` on every message, so the plugin pushes `{"what": "skin"}`
+only when a value a surface actually shows has moved, and never twice inside a
+second. The body says the workflow did not change, which is always true here:
+this plugin never writes one, and a `set` or `step` the user makes goes through
+Decaid's own setters.
+
+The `stream` socket keeps its separate meaning — the full `periodInfo` on every
+broadcast, for a client that would rather subscribe than poll. Pointing `live`
+at that firehose instead would have the skin re-read itself three times a
+second.
+
+### Writes from the skin
+
+`POST /api/v1/plugins/bookoo-mt80.reaplugin/rpm` with `{"rpm": 1000}` is what a
+tap on the status line ends up calling, once the skin's numpad has a number. It
+is not a second vocabulary: the number lands on the same `geneSetting` request
+path the page's `setSettings` command uses. It is range-checked before that,
+because anyone can POST there and the host's control validation is not in this
+path.
+
+## Device surface
+
+Separate from the dashboard surfaces above: the manifest declares one driver
+surface, `settings`, pointing at the control page's own endpoint. Device
+management consumes it through `PluginDeviceSurfaceAuthority` and opens the page
+against `localhost` for that device, without requiring a connection first. The
+plugin owns identity validation; ownership is never inferred from the device
+ID.
 
 ## Out of scope
 
@@ -220,6 +280,13 @@ restored; a final field-by-field comparison against a pre-test backup matched
 exactly, the preset list was unchanged, and the recycle bin stayed empty.
 Preset add and delete are left untested on purpose — deletion leaves a tombstone
 the protocol offers no way to purge.
+
+The dashboard surfaces are covered by the plugin's own tests, which read the
+`skin` answer the way the skin reads it and drive the `rpm` endpoint through
+the same seam the web server uses. They have not been exercised against a
+running skin yet, and the surface limits — one hint and one line per tile, one
+header button overall — belong to the skin, so the plugin can only be as good
+as the slot it wins.
 
 The protocol follows Bookoo's published
 [open-scale-protocol](https://github.com/BooKooCode/OpenSource/tree/main/bookoo_motto80)
