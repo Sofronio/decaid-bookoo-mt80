@@ -172,6 +172,30 @@ A section chip writes only the grind-size value for that range. It does not move
 the physical burr: Bookoo's guide states the MT80 adjusts manually, and that
 writing `bladeGap` does not change the physical gap.
 
+## Simulated device
+
+For building against this grinder without one, turn on the `mockDevice` plugin
+setting:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/bookoo-mt80.reaplugin/settings \
+  -H 'Content-Type: application/json' -d '{"mockDevice": true}'
+```
+
+Decaid reloads the plugin and registers an in-memory MT80 as
+`plugin:bookoo-mt80.reaplugin:mt80:simulated`, named "Bookoo MT80
+(simulated)", alongside any real one. Connect it like any other device.
+
+It publishes the same `{state, setting, rpm}` snapshot once a second, carries
+the same declared controls, and answers the control page's commands with the
+device's own rejections — ranges, booleans, `selectPreset` and all, with preset
+and section *editing* reporting that they are unsupported. Nothing it does
+touches the radio, its state is in memory and resets on reload, and the setting
+defaults to off.
+
+A real MT80 wins while it is connected: the control page and the dashboard
+surfaces serve whichever grinder is connected, and hardware is preferred.
+
 ## Dashboard surfaces
 
 A skin on the Streamline plugin-surfaces protocol can draw a fixed set of UI
@@ -287,6 +311,12 @@ the same seam the web server uses. They have not been exercised against a
 running skin yet, and the surface limits — one hint and one line per tile, one
 header button overall — belong to the skin, so the plugin can only be as good
 as the slot it wins.
+
+The simulated device is covered the same way: that the setting registers it
+and nothing registers without it, that it connects and publishes, that the
+control page and the surfaces read it, and that it rejects what the device
+rejects. Like everything else here it has not been run inside a Decaid build
+from this repository's tests alone — they need a Decaid checkout.
 
 The protocol follows Bookoo's published
 [open-scale-protocol](https://github.com/BooKooCode/OpenSource/tree/main/bookoo_motto80)

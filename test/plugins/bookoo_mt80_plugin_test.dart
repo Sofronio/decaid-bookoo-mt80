@@ -550,6 +550,99 @@ void main() {
     await grinder.disconnect();
   });
 
+  test('MT80 offers the simulated device as an off-by-default setting', () {
+    final setting =
+        bookooMt80Manifest().settings['mockDevice'] as Map<String, dynamic>;
+    expect(setting['type'], 'boolean');
+    expect(setting['default'], isFalse);
+  });
+
+  test('MT80 registers no simulated device unless the setting asks', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager);
+    // Give a registration the chance to land if one were coming.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(await manager.deviceService.devices.first, isEmpty);
+  });
+
+  test('the simulated MT80 connects, publishes and serves the page', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager, settings: const {'mockDevice': true});
+    final devices = await manager.deviceService.devices.firstWhere(
+      (list) => list.isNotEmpty,
+    );
+    final device = devices.single as PluginGrinder;
+    expect(device.deviceId, bookooMt80SimulatedDeviceId);
+    // It carries the controls the manifest declares, so the host validates a
+    // write before it ever reaches the simulator.
+    expect(device.controls['grindSetting']!.max, 999);
+
+    final snapshots = <GrinderSnapshot>[];
+    final subscription = device.currentSnapshot.listen(snapshots.add);
+    addTearDown(subscription.cancel);
+    await device.onConnect();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(snapshots, isNotEmpty);
+    expect(snapshots.last.state, GrinderState.idle);
+    expect(snapshots.last.setting, '350');
+    expect(snapshots.last.rpm, 1000);
+
+    // The page and the dashboard surfaces read it through the same handler the
+    // driver publishes, so neither can tell it is not hardware.
+    final state =
+        jsonDecode(
+              (await pluginHttp(manager, query: const {'state': '1'}))['body']
+                  as String,
+            )
+            as Map<String, dynamic>;
+    expect(state['connected'], isTrue);
+    expect((state['snapshot'] as Map)['bladeGap'], 350);
+    expect(await skinSurfaces(manager), hasLength(greaterThan(2)));
+    await device.disconnect();
+  });
+
+  test('the simulated MT80 rejects what the device rejects', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager, settings: const {'mockDevice': true});
+    final devices = await manager.deviceService.devices.firstWhere(
+      (list) => list.isNotEmpty,
+    );
+    final device = devices.single as PluginGrinder;
+    await device.onConnect();
+
+    Future<Map<String, dynamic>> command(
+      String commandId, [
+      Map<String, dynamic> params = const {},
+    ]) async {
+      final response = await pluginHttp(
+        manager,
+        method: 'POST',
+        body: {'commandId': commandId, 'params': params},
+      );
+      return jsonDecode(response['body'] as String) as Map<String, dynamic>;
+    }
+
+    expect((await command('setSettings', {'bladeGap': 5000}))['ok'], isFalse);
+    expect((await command('setSettings', {'cupDetect': 'yes'}))['ok'], isFalse);
+    expect((await command('setSettings', {'nonsense': 1}))['ok'], isFalse);
+    expect((await command('addPreset', {}))['ok'], isFalse);
+    expect((await command('getPresets'))['result']['presets'], hasLength(2));
+    expect((await command('getSections'))['result']['sections'], hasLength(2));
+    expect((await command('setSettings', {'bladeGap': 420}))['ok'], isTrue);
+
+    final state =
+        jsonDecode(
+              (await pluginHttp(manager, query: const {'state': '1'}))['body']
+                  as String,
+            )
+            as Map<String, dynamic>;
+    expect((state['snapshot'] as Map)['bladeGap'], 420);
+    await device.disconnect();
+  });
+
   test('MT80 advertisement without mt80 in the name is not claimed', () async {
     final manager = PluginManager(kvStore: FakeKeyValueStoreService());
     addTearDown(manager.dispose);
