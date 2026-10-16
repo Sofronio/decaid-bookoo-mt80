@@ -352,10 +352,33 @@ function createPlugin(host) {
   // The loader aliases `handleHttpRequest` on the object `createPlugin`
   // returns, not on the device the driver factory returns, so the driver
   // publishes its handler here.
-  let deviceHandler = null;
+  let bleHandler = null; // the driver, once an MT80 binds
+  let simulatedHandler = null; // the simulator, when the setting asked for it
+  let deviceHandler = null; // what the HTTP endpoints and the surfaces serve
+
+  // A connected grinder wins; otherwise the simulator serves, so the control
+  // page and the dashboard surfaces work with no hardware at all.
+  function refreshHandler() {
+    if (bleHandler && bleHandler.connected()) deviceHandler = bleHandler;
+    else deviceHandler = simulatedHandler || bleHandler;
+  }
 
   const rpmRange = { min: 500, max: 1500 };
   const grindSteps = [10, 1];
+
+  // The device state vocabulary is its own; only these four reach the host.
+  // Anything else is honestly unknown rather than guessed. The simulated
+  // device speaks it too, so both paths map alike.
+  const grinderStates = {
+    IDLE: "idle",
+    GRINDING: "grinding",
+    HIGHSPEEDCLEAN: "grinding",
+    WARNING: "error",
+  };
+
+  function mapDeviceState(devState) {
+    return grinderStates[String(devState || "").toUpperCase()] || "unknown";
+  }
 
   // The skin draws these itself and runs only the actions it knows, so the
   // answer stays within the documented kinds. The status line states the burr
@@ -450,6 +473,191 @@ function createPlugin(host) {
     return { version: 1, surfaces, live: { endpoint: "changed" } };
   }
 
+  // A MT80 with no radio, for building against without hardware. It is opt-in
+  // through the `mockDevice` setting, publishes the same snapshot the driver
+  // does and answers the same command surface the control page uses, so
+  // nothing above it can tell the difference. The fixture values are the ones
+  // allofmeng set out in the original patch.
+  const simulatedTickMs = 1000;
+  const simulatedRanges = {
+    feedingRpm: [10, 65],
+    grindRpm: [500, 1500],
+    bladeGap: [0, 999],
+    brightness: [1, 5],
+    standbySec: [60, 900],
+  };
+  const simulatedBools = ["cupDetect", "autoStop", "fastClean"];
+
+  function registerSimulatedDevice() {
+    const state = {
+      feedingRpm: 40,
+      bladeGap: 350,
+      grindRpm: 1000,
+      humidity: 45,
+      devState: "IDLE",
+      netState: "CONNECTED",
+      totalGrinds: 128,
+      cupDetect: false,
+      autoStop: true,
+      fastClean: false,
+      brightness: 3,
+      standbySec: 300,
+      selectPreset: 1,
+    };
+    const presets = [
+      {
+        index: 1,
+        name: "Espresso",
+        note: "",
+        bladeGap: 350,
+        feedingRpm: 40,
+        grindRpm: 1000,
+      },
+      {
+        index: 2,
+        name: "Filter",
+        note: "",
+        bladeGap: 600,
+        feedingRpm: 45,
+        grindRpm: 1200,
+      },
+    ];
+    const sections = [
+      { name: "Espresso", range: [250, 450] },
+      { name: "Filter", range: [500, 800] },
+    ];
+
+    let session = null;
+    let timer = null;
+
+    function publish() {
+      if (!session) return;
+      session.publish({
+        state: mapDeviceState(state.devState),
+        setting: String(state.bladeGap),
+        rpm: state.grindRpm,
+      });
+    }
+
+    // Chained timeouts rather than an interval, so a disconnected device
+    // cannot leave a timer behind.
+    function tick() {
+      publish();
+      timer = session ? setTimeout(tick, simulatedTickMs) : null;
+    }
+
+    // The same rejections the device makes, so a caller that works here is
+    // not surprised by hardware.
+    function apply(input) {
+      const next = {};
+      for (const key of Object.keys(input)) {
+        if (key === "selectPreset") {
+          const preset = presets.find((entry) => entry.index === input[key]);
+          if (!preset) throw new Error(`No preset ${input[key]}`);
+          next.selectPreset = preset.index;
+          next.bladeGap = preset.bladeGap;
+          next.feedingRpm = preset.feedingRpm;
+          next.grindRpm = preset.grindRpm;
+        } else if (simulatedRanges[key]) {
+          const [min, max] = simulatedRanges[key];
+          const value = input[key];
+          if (!Number.isInteger(value) || value < min || value > max) {
+            throw new Error(`${key} out of range ${min}-${max}`);
+          }
+          next[key] = value;
+        } else if (simulatedBools.includes(key)) {
+          if (typeof input[key] !== "boolean") {
+            throw new Error(`${key} must be boolean`);
+          }
+          next[key] = input[key];
+        } else {
+          throw new Error(`Unknown MT80 setting: ${key}`);
+        }
+      }
+      Object.assign(state, next);
+      publish();
+      return { ...state };
+    }
+
+    function post(body) {
+      return Promise.resolve().then(() => {
+        switch (body.commandId) {
+          case "getSettings":
+            return { ok: true, result: { ...state } };
+          case "setSettings":
+            return { ok: true, result: apply(body.params || {}) };
+          case "getSections":
+            return { ok: true, result: { sections: sections.map((s) => ({ ...s })) } };
+          case "getPresets":
+            return { ok: true, result: { presets: presets.map((p) => ({ ...p })) } };
+          case "getRecycleBin":
+            return { ok: true, result: { deleted: [] } };
+          default:
+            throw new Error(
+              `${body.commandId} is not supported by the simulated MT80`
+            );
+        }
+      }).catch((error) => ({
+        ok: false,
+        error: String(error && error.message ? error.message : error),
+      }));
+    }
+
+    simulatedHandler = {
+      connected: () => session !== null,
+      state: () => ({
+        connected: session !== null,
+        snapshot: session ? { ...state } : null,
+        baseInfo: { snCode: "SIMULATED" },
+        logs: [
+          {
+            kind: "broadcast",
+            text: "simulated device: no radio, nothing here reaches hardware",
+            at: 0,
+          },
+        ],
+      }),
+      post,
+      // `setting` is the grind size the device reports, which the tile-sync
+      // surface hands to the dashboard.
+      surface: () =>
+        session
+          ? {
+              state: mapDeviceState(state.devState),
+              rpm: state.grindRpm,
+              setting: state.bladeGap,
+            }
+          : null,
+    };
+
+    return host.devices.register(
+      {
+        driverId: "mt80",
+        instanceId: "simulated",
+        name: "Bookoo MT80 (simulated)",
+      },
+      {
+        connect(activeSession) {
+          session = activeSession;
+          refreshHandler();
+          tick();
+        },
+        disconnect() {
+          session = null;
+          if (timer) clearTimeout(timer);
+          timer = null;
+          refreshHandler();
+        },
+        setGrindSetting(setting) {
+          apply({ bladeGap: Number(setting) });
+        },
+        setRpm(rpm) {
+          apply({ grindRpm: Number(rpm) });
+        },
+      }
+    );
+  }
+
   return {
     id: "bookoo-mt80.reaplugin",
     handleHttpRequest(request) {
@@ -523,8 +731,8 @@ function createPlugin(host) {
       }
       return json({ ok: false, error: "method not allowed" }, 405);
     },
-    onLoad() {
-      return host.devices.bindDriver("mt80", {
+    onLoad(settings) {
+      const binding = host.devices.bindDriver("mt80", {
         create(device) {
           let context = null;
           let sequence = 0;
@@ -693,20 +901,8 @@ function createPlugin(host) {
             rxState = null;
           }
 
-          // The device state vocabulary is its own; only these four reach the
-          // host. Anything else is honestly unknown rather than guessed.
-          const grinderStates = {
-            IDLE: "idle",
-            GRINDING: "grinding",
-            HIGHSPEEDCLEAN: "grinding",
-            WARNING: "error",
-          };
-
           function mappedState() {
-            return (
-              grinderStates[String(snapshot.devState || "").toUpperCase()] ||
-              "unknown"
-            );
+            return mapDeviceState(snapshot.devState);
           }
 
           function publishSnapshot() {
@@ -924,11 +1120,13 @@ function createPlugin(host) {
             }
           }
 
-          deviceHandler = {
+          bleHandler = {
             state: uiState,
             post: handlePost,
             surface: surfaceState,
+            connected: () => context !== null,
           };
+          refreshHandler();
 
           function writeSetting(data) {
             return request("geneSetting", { op: "set", data });
@@ -967,6 +1165,7 @@ function createPlugin(host) {
               session.gatt.onDisconnect(() => {
                 abortPending(new Error("MT80 disconnected"));
                 context = null;
+                refreshHandler();
                 notifySkin();
               });
               await session.gatt.subscribe(service, tx, (data) => {
@@ -981,6 +1180,7 @@ function createPlugin(host) {
             disconnect() {
               abortPending(new Error("MT80 disconnected"));
               context = null;
+              refreshHandler();
               notifySkin();
             },
             bleEvent() {},
@@ -993,6 +1193,13 @@ function createPlugin(host) {
           };
         },
       });
+      if (!settings || settings.mockDevice !== true) return binding;
+      // A registration that fails must not take the BLE driver down with it,
+      // and the plugin is not allowed to log (no `log` permission), so the
+      // README says which device id to look for instead.
+      return Promise.resolve(binding)
+        .then(() => registerSimulatedDevice())
+        .catch(() => {});
     },
   };
 }

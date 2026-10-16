@@ -49,7 +49,14 @@
       ]
     }
   ],
-  "settings": {},
+  "settings": {
+    "mockDevice": {
+      "type": "boolean",
+      "label": "Simulated MT80",
+      "description": "Register an in-memory MT80 for testing without hardware. Takes effect when the plugin loads.",
+      "default": false
+    }
+  },
   "api": [
     {
       "id": "ui",

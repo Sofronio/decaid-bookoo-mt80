@@ -17,12 +17,19 @@ PluginManifest bookooMt80Manifest() => PluginManifest.fromJson(
   jsonDecode(File('$bookooMt80PluginPath/manifest.json').readAsStringSync()),
 );
 
-Future<void> loadBookooMt80Plugin(PluginManager manager) => manager.loadPlugin(
+Future<void> loadBookooMt80Plugin(
+  PluginManager manager, {
+  Map<String, dynamic> settings = const {},
+}) => manager.loadPlugin(
   id: bookooMt80Manifest().id,
   manifest: bookooMt80Manifest(),
-  settings: {},
+  settings: settings,
   jsCode: File('$bookooMt80PluginPath/plugin.js').readAsStringSync(),
 );
+
+/// The device id a `mockDevice` load registers, with no radio behind it.
+const bookooMt80SimulatedDeviceId =
+    'plugin:bookoo-mt80.reaplugin:mt80:simulated';
 
 /// The published UID test vector, so a regression in the 64-bit FNV path fails
 /// here rather than only against the device.
