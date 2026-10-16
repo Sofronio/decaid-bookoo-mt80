@@ -349,250 +349,136 @@ function createPlugin(host) {
     ].join("");
   }
 
-  const dataChannels = [
-    { key: "feedingRpm", type: "integer", unit: "rpm" },
-    { key: "bladeGap", type: "integer", unit: "um" },
-    { key: "grindRpm", type: "integer", unit: "rpm" },
-    { key: "humidity", type: "integer", unit: "%RH" },
-    { key: "devState", type: "string" },
-    { key: "netState", type: "string" },
-    { key: "totalGrinds", type: "integer" },
-    { key: "cupDetect", type: "boolean" },
-    { key: "autoStop", type: "boolean" },
-    { key: "fastClean", type: "boolean" },
-    { key: "brightness", type: "integer" },
-    { key: "standbySec", type: "integer" },
-    { key: "selectPreset", type: "integer" },
-  ];
-
-  const commands = [
-    {
-      id: "getSettings",
-      name: "Read general settings",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "setSettings",
-      name: "Write general settings",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "getSections",
-      name: "Read grinding sections",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "array" },
-    },
-    {
-      id: "setSections",
-      name: "Write grinding sections",
-      paramsSchema: {
-        type: "object",
-        properties: { sections: { type: "array" } },
-      },
-      resultsSchema: { type: "array" },
-    },
-    {
-      id: "getPresets",
-      name: "Read presets",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "array" },
-    },
-    {
-      id: "addPreset",
-      name: "Add a preset",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "updatePreset",
-      name: "Edit a preset",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "deletePreset",
-      name: "Delete a preset",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "restorePreset",
-      name: "Restore a deleted preset",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "reorderPreset",
-      name: "Reorder a preset",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "object" },
-    },
-    {
-      id: "importPresets",
-      name: "Import presets",
-      paramsSchema: {
-        type: "object",
-        properties: { presets: { type: "array" } },
-      },
-      resultsSchema: { type: "array" },
-    },
-    {
-      id: "getRecycleBin",
-      name: "Read the preset recycle bin",
-      paramsSchema: { type: "object" },
-      resultsSchema: { type: "array" },
-    },
-  ];
-
   // The loader aliases `handleHttpRequest` on the object `createPlugin`
   // returns, not on the device the driver factory returns, so the driver
   // publishes its handler here.
   let deviceHandler = null;
 
-  // Simulated MT80 (opt-in via the `mockDevice` setting): registers a
-  // non-BLE sensor with the same channels and commands so skins and the
-  // control page can be exercised without hardware. State is in memory only.
-  const simRanges = {
-    feedingRpm: [10, 65],
-    grindRpm: [500, 1500],
-    bladeGap: [0, 999],
-    brightness: [1, 5],
-    standbySec: [60, 900],
-  };
-  const simBools = ["cupDetect", "autoStop", "fastClean"];
-  const simTickMs = 1000;
+  const rpmRange = { min: 500, max: 1500 };
+  const grindSteps = [10, 1];
 
-  async function registerSimulatedDevice() {
-    const state = {
-      feedingRpm: 40,
-      bladeGap: 350,
-      grindRpm: 1000,
-      humidity: 45,
-      devState: "IDLE",
-      netState: "CONNECTED",
-      totalGrinds: 128,
-      cupDetect: false,
-      autoStop: true,
-      fastClean: false,
-      brightness: 3,
-      standbySec: 300,
-      selectPreset: 1,
-    };
-    const presets = [
-      { index: 1, name: "Espresso", note: "", bladeGap: 350, feedingRpm: 40, grindRpm: 1000 },
-      { index: 2, name: "Filter", note: "", bladeGap: 600, feedingRpm: 45, grindRpm: 1200 },
-    ];
-    const sections = [
-      { name: "Espresso", range: [250, 450] },
-      { name: "Filter", range: [500, 800] },
-    ];
-    let handle = null;
-    let stopped = false;
-
-    function publish() {
-      if (handle) handle.publish({ ...state });
-    }
-
-    function applySettings(input) {
-      const next = {};
-      for (const key of Object.keys(input)) {
-        if (key === "selectPreset") {
-          const preset = presets.find((p) => p.index === input[key]);
-          if (!preset) throw new Error(`No preset ${input[key]}`);
-          next.selectPreset = preset.index;
-          next.bladeGap = preset.bladeGap;
-          next.feedingRpm = preset.feedingRpm;
-          next.grindRpm = preset.grindRpm;
-        } else if (simRanges[key]) {
-          const value = input[key];
-          const [min, max] = simRanges[key];
-          if (!Number.isInteger(value) || value < min || value > max) {
-            throw new Error(`${key} out of range ${min}-${max}`);
-          }
-          next[key] = value;
-        } else if (simBools.includes(key)) {
-          if (typeof input[key] !== "boolean") throw new Error(`${key} must be boolean`);
-          next[key] = input[key];
-        } else {
-          throw new Error(`Unknown MT80 setting: ${key}`);
-        }
-      }
-      Object.assign(state, next);
-      publish();
-      return { ...state };
-    }
-
-    async function execute({ commandId, params }) {
-      switch (commandId) {
-        case "getSettings":
-          return { ...state };
-        case "setSettings":
-          return applySettings(params || {});
-        case "getSections":
-          return { sections: sections.map((s) => ({ ...s })) };
-        case "getPresets":
-          return { presets: presets.map((p) => ({ ...p })) };
-        case "getRecycleBin":
-          return { deleted: [] };
-        default:
-          throw new Error(`${commandId} is not supported by the simulated MT80`);
-      }
-    }
-
-    // Chained setTimeout rather than setInterval, so a stopped device
-    // cannot leave a timer behind.
-    function tick() {
-      if (stopped) return;
-      publish();
-      setTimeout(tick, simTickMs);
-    }
-
-    handle = await host.devices.register(
+  // The skin draws these itself and runs only the actions it knows, so the
+  // answer stays within the documented kinds. The status line states the burr
+  // speed, which the Grind tile has no room for once it is showing the
+  // setting, and carries the RPM control; the pill coarsens the grind step,
+  // which the device only takes whole. The buttons stay up with no device
+  // bound, because the page reports that state itself.
+  function skinAnswer() {
+    const surface = deviceHandler ? deviceHandler.surface() : null;
+    const surfaces = [
       {
-        driverId: "mt80",
-        instanceId: "simulated",
-        name: "Bookoo MT80 (simulated)",
-        vendor: "Bookoo",
-        dataChannels,
-        commands,
+        id: "mt80-page",
+        kind: "header-button",
+        label: "MT80",
+        action: { type: "open", view: "main" },
       },
       {
-        async connect() {},
-        async disconnect() {
-          stopped = true;
+        id: "mt80-saver",
+        kind: "screensaver-button",
+        label: "MT80",
+        action: { type: "open", view: "main" },
+      },
+    ];
+    if (surface) {
+      const rpm = surface.rpm;
+      const line = {
+        id: "mt80-state",
+        kind: "tile-line",
+        tile: "grind",
+        text:
+          surface.state === "error"
+            ? "MT80 · warning"
+            : Number.isFinite(rpm)
+              ? "MT80 · " + rpm + " rpm"
+              : "MT80",
+        active: surface.state === "grinding",
+      };
+      if (Number.isFinite(rpm)) {
+        line.action = {
+          type: "call",
+          endpoint: "rpm",
+          field: "rpm",
+          input: {
+            title: "RPM",
+            unit: "rpm",
+            min: rpmRange.min,
+            max: rpmRange.max,
+            decimals: 0,
+            value: Math.min(Math.max(rpm, rpmRange.min), rpmRange.max),
+          },
+        };
+      }
+      // Deliberately no `tile-mode` on grind. A mode takes the tile's label
+      // slot, and the skin then stops drawing this line whatever option is
+      // selected -- `modeTiles.has(tile)` skips it at parse time, not on
+      // selection -- so a mode here would cost the status line for good. The
+      // line carries the RPM control instead: a tap opens the skin's own
+      // numpad, which calls the `rpm` endpoint.
+      surfaces.push(line);
+      // No `text`: the skin writes the pill from the size the user picked on
+      // this device, cycling between `±10` and `±1`. A `text` here would win
+      // over that and freeze the pill on one label.
+      surfaces.push({
+        id: "mt80-step",
+        kind: "tile-hint",
+        tile: "grind",
+        action: {
+          type: "stepsize",
+          field: "grinderSetting",
+          sizes: grindSteps,
         },
-        execute,
-      }
-    );
-    deviceHandler = {
-      state: () => ({
-        connected: !stopped,
-        snapshot: { ...state },
-        baseInfo: { snCode: "SIMULATED" },
-        logs: [],
-      }),
-      post: async (body) => {
-        try {
-          return { ok: true, result: await execute({ commandId: body.commandId, params: body.params || {} }) };
-        } catch (error) {
-          return { ok: false, error: String(error && error.message ? error.message : error) };
-        }
-      },
-    };
-    publish();
-    setTimeout(tick, simTickMs);
+      });
+    }
+    return { version: 1, surfaces, live: { endpoint: "changed" } };
   }
 
   return {
     id: "bookoo-mt80.reaplugin",
     handleHttpRequest(request) {
-      const json = (value) => ({
-        status: 200,
+      const json = (value, status) => ({
+        status: status === undefined ? 200 : status,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(value),
       });
+      // Decaid routes every declared endpoint to this one handler, so the
+      // endpoint id is the discriminator. Without it a skin read would fall
+      // through to the control page and never parse as an answer.
+      if (request.endpoint === "skin") {
+        if (request.method !== "GET") {
+          return json({ ok: false, error: "method not allowed" }, 405);
+        }
+        return json(skinAnswer());
+      }
+      if (request.endpoint === "rpm") {
+        if (request.method !== "POST") {
+          return json({ ok: false, error: "method not allowed" }, 405);
+        }
+        if (!deviceHandler) {
+          return json({ ok: false, error: "no MT80 device bound" }, 409);
+        }
+        // Anyone can POST here and the host's control validation is not in
+        // this path, so the range check is the only guard.
+        const rpm = Math.round(Number((request.body || {}).rpm));
+        if (!Number.isFinite(rpm) || rpm < rpmRange.min || rpm > rpmRange.max) {
+          return json({ ok: false, error: "rpm out of range" }, 400);
+        }
+        return Promise.resolve(
+          deviceHandler.post({
+            commandId: "setSettings",
+            params: { grindRpm: rpm },
+          })
+        ).then((result) =>
+          result && result.ok
+            ? json({ ok: true, rpm })
+            : json(
+                {
+                  ok: false,
+                  error: (result && result.error) || "MT80 rejected the rpm",
+                },
+                502
+              )
+        );
+      }
       if (request.method === "GET") {
         if (request.query && request.query.state === "1") {
           return json(
@@ -617,18 +503,10 @@ function createPlugin(host) {
           json
         );
       }
-      return {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ok: false, error: "method not allowed" }),
-      };
+      return json({ ok: false, error: "method not allowed" }, 405);
     },
-    onLoad(settings) {
-      const simulated =
-        settings && settings.mockDevice === true
-          ? registerSimulatedDevice()
-          : Promise.resolve();
-      const bound = host.devices.bindDriver("mt80", {
+    onLoad() {
+      return host.devices.bindDriver("mt80", {
         create(device) {
           let context = null;
           let sequence = 0;
@@ -767,15 +645,17 @@ function createPlugin(host) {
               }
               const info = message.broadcast.periodInfo;
               if (!info) return;
-              if (handshake) {
-                const current = handshake;
-                handshake = null;
-                clearTimeout(current.timer);
-                current.resolve();
-              }
               snapshot = { ...info };
               log("broadcast", json);
-              context.publish({ ...info });
+              publishSnapshot().then(
+                () => settleReady(null),
+                (error) => settleReady(error)
+              );
+              // The grinder snapshot carries only state, setting and rpm. The
+              // rest of periodInfo — feed RPM above all — has no slot in that
+              // contract, so it leaves through the plugin's own WebSocket.
+              host.emit("stream", { ...info });
+              notifySkin();
               return;
             }
             if (message.response) {
@@ -791,20 +671,61 @@ function createPlugin(host) {
               clearTimeout(current.timer);
               current.reject(reason);
             }
-            const waiting = handshake;
-            handshake = null;
-            if (waiting) {
-              clearTimeout(waiting.timer);
-              waiting.reject(reason);
-            }
+            settleReady(reason);
             rxState = null;
+          }
+
+          // The device state vocabulary is its own; only these four reach the
+          // host. Anything else is honestly unknown rather than guessed.
+          const grinderStates = {
+            IDLE: "idle",
+            GRINDING: "grinding",
+            HIGHSPEEDCLEAN: "grinding",
+            WARNING: "error",
+          };
+
+          function mappedState() {
+            return (
+              grinderStates[String(snapshot.devState || "").toUpperCase()] ||
+              "unknown"
+            );
+          }
+
+          function publishSnapshot() {
+            if (!context || !snapshot) return Promise.resolve();
+            const payload = { state: mappedState() };
+            if (snapshot.bladeGap !== undefined) {
+              payload.setting = String(snapshot.bladeGap);
+            }
+            if (snapshot.grindRpm !== undefined) {
+              payload.rpm = snapshot.grindRpm;
+            }
+            return Promise.resolve(context.publish(payload)).catch((error) => {
+              log(
+                "error",
+                "publish: " +
+                  String(error && error.message ? error.message : error)
+              );
+              throw error;
+            });
+          }
+
+          // Readiness is a publication, not an arrival: the host requires a
+          // valid initial snapshot before the grinder is usable.
+          function settleReady(error) {
+            const current = handshake;
+            if (!current) return;
+            handshake = null;
+            clearTimeout(current.timer);
+            if (error) current.reject(error);
+            else current.resolve();
           }
 
           function presetSelector(uid) {
             return { type: "uid", value: uid };
           }
 
-          async function execute({ commandId, params }) {
+          async function runCommand({ commandId, params }) {
             const input = params || {};
             switch (commandId) {
               case "getSettings":
@@ -915,11 +836,57 @@ function createPlugin(host) {
             };
           }
 
+          // What the dashboard surfaces show, in the host's vocabulary rather
+          // than the device's. Null while nothing is bound, which is how the
+          // skin answer tells "connected" from "grind tile only".
+          function surfaceState() {
+            if (!context || !snapshot) return null;
+            return { state: mappedState(), rpm: Number(snapshot.grindRpm) };
+          }
+
+          // The skin holds the `changed` socket open and re-reads `skin` on
+          // every message, so a push goes out only when a value the surfaces
+          // actually show has moved, and never twice inside a second:
+          // periodInfo arrives at 5 Hz, and a stream at that rate would make
+          // the skin re-read itself three times a second forever. The body
+          // says only `skin` changed, because this driver never writes the
+          // workflow.
+          const skinPushIntervalMs = 1000;
+          let skinKey = "";
+          let skinTimer = null;
+          let skinSentAt = 0;
+
+          function notifySkin() {
+            const key =
+              context && snapshot
+                ? `on|${snapshot.devState}|${snapshot.grindRpm}`
+                : "off";
+            if (key === skinKey) return;
+            skinKey = key;
+            const wait = skinSentAt + skinPushIntervalMs - Date.now();
+            if (wait <= 0) {
+              if (skinTimer) {
+                clearTimeout(skinTimer);
+                skinTimer = null;
+              }
+              skinSentAt = Date.now();
+              host.emit("changed", { what: "skin" });
+              return;
+            }
+            // A push is already scheduled and would carry this state anyway.
+            if (skinTimer) return;
+            skinTimer = setTimeout(() => {
+              skinTimer = null;
+              skinSentAt = Date.now();
+              host.emit("changed", { what: "skin" });
+            }, wait);
+          }
+
           // The page drives the same command surface the Sensor API exposes;
           // the HTTP layer is transport only, not a second vocabulary.
           async function handlePost(body) {
             try {
-              const result = await execute({
+              const result = await runCommand({
                 commandId: body.commandId,
                 params: body.params || {},
               });
@@ -932,12 +899,25 @@ function createPlugin(host) {
             }
           }
 
-          deviceHandler = { state: uiState, post: handlePost };
+          deviceHandler = {
+            state: uiState,
+            post: handlePost,
+            surface: surfaceState,
+          };
+
+          function writeSetting(data) {
+            return request("geneSetting", { op: "set", data });
+          }
+
+          function numeric(value, label) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+              throw new Error(`MT80 ${label} must be numeric`);
+            }
+            return Math.round(parsed);
+          }
 
           return {
-            vendor: "Bookoo",
-            dataChannels,
-            commands,
             async connect(session) {
               const services = await session.gatt.discoverServices();
               if (!services.includes(service)) {
@@ -962,6 +942,7 @@ function createPlugin(host) {
               session.gatt.onDisconnect(() => {
                 abortPending(new Error("MT80 disconnected"));
                 context = null;
+                notifySkin();
               });
               await session.gatt.subscribe(service, tx, (data) => {
                 const json = reassemble(data, Date.now());
@@ -975,18 +956,18 @@ function createPlugin(host) {
             disconnect() {
               abortPending(new Error("MT80 disconnected"));
               context = null;
+              notifySkin();
             },
-            execute,
+            bleEvent() {},
+            async setGrindSetting(setting) {
+              await writeSetting({ bladeGap: numeric(setting, "grind setting") });
+            },
+            async setRpm(rpm) {
+              await writeSetting({ grindRpm: numeric(rpm, "rpm") });
+            },
           };
         },
       });
-      // A failing simulator must not take the real BLE driver down with it.
-      return Promise.all([
-        bound,
-        simulated.catch((error) => {
-          console.warn("Simulated MT80 failed to register:", error);
-        }),
-      ]).then(() => undefined);
     },
   };
 }

@@ -7,13 +7,15 @@ owns discovery, the BLE connection lifecycle, and the device surface.
 No Decaid release is needed to use this, and none is needed to add support for
 another device.
 
-## Why this is a Sensor, not a Grinder
+## Driver type
 
-Decaid has no grinder driver type yet, so this driver declares
-`"type": "sensor"`. That is a lossless mapping rather than a workaround: the
-MT80 reports grinding parameters, not weight, and the Sensor surface carries
-arbitrary named data channels with units. All thirteen documented `periodInfo`
-fields survive.
+The MT80 declares the `grinder` driver type. It exposes the two controls
+Bookoo's published protocol actually documents — `grindSetting` and
+`rpmControl` — and publishes `state`, `setting` and `rpm` as its snapshot.
+Grinding start and stop is deliberately not declared; see Out of scope.
+
+Earlier versions declared a Sensor because Decaid had no grinder type. That is
+no longer needed.
 
 ## Install
 
@@ -72,36 +74,43 @@ object, so this driver keeps one request in flight and correlates by that key
 rather than by `sequence` — the specification explicitly forbids using
 `sequence` for correlation.
 
-## Data channels
+## Snapshot
 
-`feedingRpm` (rpm), `bladeGap` (um), `grindRpm` (rpm), `humidity` (%RH),
-`devState`, `netState`, `totalGrinds`, `cupDetect`, `autoStop`, `fastClean`,
-`brightness`, `standbySec`, `selectPreset`.
+The driver publishes `{state, setting, rpm}`:
 
-## Commands
+| Field | Source in `periodInfo` | Mapping |
+| --- | --- | --- |
+| `state` | `devState` | `IDLE` → `idle`, `GRINDING` and `HighSpeedClean` → `grinding`, `WARNING` → `error`, anything else → `unknown` |
+| `setting` | `bladeGap` | string, requires `grindSetting` |
+| `rpm` | `grindRpm` | integer, requires `rpmControl` |
 
-Available through `POST /api/v1/sensors/:id/execute`.
+The device vocabulary is its own; only these four states reach the host, and
+anything unrecognised is reported as `unknown` rather than guessed.
 
-| Command | Purpose |
-| --- | --- |
-| `getSettings` | Read every `geneSetting` field |
-| `setSettings` | Write `geneSetting` fields; the body is the field set |
-| `getSections` | Read all grinding sections |
-| `setSections` | Write all grinding sections from `sections` |
-| `getPresets` | Read every visible preset |
-| `addPreset` | Add a preset; generates the UID when none is supplied |
-| `updatePreset` | Edit `name`, `note`, `bladeGap`, `feedingRpm`, `grindRpm` |
-| `deletePreset` | Move a preset to the recycle bin |
-| `restorePreset` | Restore a deleted preset, optionally at `index` |
-| `reorderPreset` | Move a preset to a new `index` |
-| `importPresets` | Replace the preset list from `presets` |
-| `getRecycleBin` | List deleted presets |
+**Readiness is the publication, not the arrival.** The host requires a valid
+initial snapshot before the grinder is usable, so `connect` resolves only after
+the host accepts the first publication — a rejected snapshot fails the connect
+rather than leaving a half-ready device.
 
-`addPreset` generates the 32-character UID with the specification's FNV-1a
-64-bit algorithm when the caller does not supply one. The implementation runs on
-32-bit limbs because the plugin runtime cannot be assumed to have `BigInt`, and
-it reproduces the published test vector
-`ae8f0ec693f96e37140fc424ab5df303`.
+The other documented `periodInfo` fields — feed RPM, humidity, network state,
+lifetime grind count, cup detect, auto stop, fast clean, brightness, standby and
+the selected preset — have no place in the grinder snapshot. They remain visible
+on the control page, which reads the driver's own cache.
+
+## Controls
+
+| Capability | Handler | Declared control |
+| --- | --- | --- |
+| `grindSetting` | `setGrindSetting(setting)` | numeric 0–999, step 1 (`bladeGap`) |
+| `rpmControl` | `setRpm(rpm)` | numeric 500–1500, step 10 (`grindRpm`) |
+
+Each writes one `geneSetting` field and waits for the device's response. The
+host validates the value against the declared control before invoking the
+handler, so the driver only normalises and rounds.
+
+The page also drives a wider command surface over the plugin's own HTTP
+endpoint — settings, grinding sections and preset CRUD. Those are the page's
+commands, not part of the grinder contract.
 
 ## Control page
 
@@ -120,10 +129,34 @@ feed and grind RPM, a live status table, draggable sliders that send on a 250 ms
 debounce, boolean toggles, preset and section chips, and a per-kind send,
 response, and broadcast log. It toggles between English and Chinese.
 
-It drives **the same command surface** the Sensor API exposes — the sliders post
-`setSettings`, the preset chips post `setSettings {selectPreset}`, and the
-section chips post `setSettings {bladeGap}`. The HTTP layer is transport only,
-not a second vocabulary.
+Its `POST` body is `{commandId, params}`:
+
+| Command | Purpose |
+| --- | --- |
+| `getSettings` | Read every `geneSetting` field |
+| `setSettings` | Write `geneSetting` fields; the body is the field set |
+| `getSections` | Read all grinding sections |
+| `setSections` | Write all grinding sections from `sections` |
+| `getPresets` | Read every visible preset |
+| `addPreset` | Add a preset; generates the UID when none is supplied |
+| `updatePreset` | Edit `name`, `note`, `bladeGap`, `feedingRpm`, `grindRpm` |
+| `deletePreset` | Move a preset to the recycle bin |
+| `restorePreset` | Restore a deleted preset, optionally at `index` |
+| `reorderPreset` | Move a preset to a new `index` |
+| `importPresets` | Replace the preset list from `presets` |
+| `getRecycleBin` | List deleted presets |
+
+`addPreset` generates the 32-character UID with the specification's FNV-1a
+64-bit algorithm when the caller does not supply one, and reproduces the
+published test vector `ae8f0ec693f96e37140fc424ab5df303`. The implementation
+runs on 32-bit limbs because the plugin runtime cannot be assumed to have
+`BigInt`.
+
+The sliders post `setSettings`, the preset chips post
+`setSettings {selectPreset}`, and the section chips post
+`setSettings {bladeGap}`. The HTTP layer is transport only, not a second
+vocabulary: every command lands on the same `geneSetting` request path the
+grinder controls use.
 
 Polling reads the cached `periodInfo` and never touches the device, because the
 driver keeps one request in flight and a polling request would block real
@@ -139,28 +172,81 @@ A section chip writes only the grind-size value for that range. It does not move
 the physical burr: Bookoo's guide states the MT80 adjusts manually, and that
 writing `bladeGap` does not change the physical gap.
 
-## Simulated device
+## Dashboard surfaces
 
-For skin development without hardware, turn on the `mockDevice` plugin setting:
+A skin on the Streamline plugin-surfaces protocol can draw a fixed set of UI
+pieces for a plugin that answers its `skin` endpoint, and runs only the actions
+it knows — no plugin code runs in the skin. The plugin answers
+`GET /api/v1/plugins/bookoo-mt80.reaplugin/skin` with what this grinder has to
+offer:
 
-```bash
-curl -X POST http://localhost:8080/api/v1/plugins/bookoo-mt80.reaplugin/settings \
-  -H 'Content-Type: application/json' -d '{"mockDevice": true}'
-```
+| Surface | Kind | Where | Shows |
+| --- | --- | --- | --- |
+| `mt80-state` | `tile-line` | under the Grind label | the burr speed, or `warning`; drawn switched on while grinding, and a tap opens the skin's numpad to set it |
+| `mt80-step` | `tile-hint` | the Grind tile's pill | a coarse/fine `±10` / `±1` step for the grind setting |
+| `mt80-page` | `header-button` | the dashboard header | the control page |
+| `mt80-saver` | `screensaver-button` | over the screensaver | the control page |
 
-Decaid reloads the plugin and a sensor named "Bookoo MT80 (simulated)" appears
-as connected (`plugin:bookoo-mt80.reaplugin:mt80:simulated`), alongside any real
-MT80. It publishes the same 13 channels once a second and accepts
-`setSettings` with the same ranges, type checks and `selectPreset` behaviour as
-the device. `getSettings`, `getPresets`, `getSections` and `getRecycleBin` work;
-the preset and section editing commands report that they are unsupported. State
-is in memory and resets on reload. The setting defaults to off.
+The line is where `rpmControl` lives, because the grinder snapshot carries one
+number and the tile spends it on the setting. It is a `line` and not a `hint`
+because a hint shares its slot with the pill, and the skin draws one of each per
+tile. `stepsize` is the one action that reaches the tile's own `-`/`+` without
+taking a slot the text needs.
+
+**No `tile-mode` on grind, on purpose.** A mode takes the tile's label slot, and
+the skin then stops drawing a `tile-line` on that tile *whatever option is
+selected* — `modeTiles.has(tile)` is decided when the answer is parsed, not when
+the user switches. Offering one would cost the status line permanently, and the
+only thing it would add here is `±` stepping for a number that is set once per
+bean. The line's `input` action reaches the same `rpm` endpoint.
+
+The pill carries no `text` of its own. The skin labels it from the size the
+user picked on that device, cycling `±10` and `±1`; a `text` in the answer takes
+precedence over that label and would freeze it.
+
+The buttons are drawn even with no device bound — the page reports "not
+connected" itself. The grind surfaces are not, because they would have nothing
+to say.
+
+### Keeping the skin in sync
+
+`live` in the same answer names the `changed` websocket. The skin holds it open
+and re-reads `skin` on every message, so the plugin pushes `{"what": "skin"}`
+only when a value a surface actually shows has moved, and never twice inside a
+second. The body says the workflow did not change, which is always true here:
+this plugin never writes one, and a `set` or `step` the user makes goes through
+Decaid's own setters.
+
+The `stream` socket keeps its separate meaning — the full `periodInfo` on every
+broadcast, for a client that would rather subscribe than poll. Pointing `live`
+at that firehose instead would have the skin re-read itself three times a
+second.
+
+### Writes from the skin
+
+`POST /api/v1/plugins/bookoo-mt80.reaplugin/rpm` with `{"rpm": 1000}` is what a
+tap on the status line ends up calling, once the skin's numpad has a number. It
+is not a second vocabulary: the number lands on the same `geneSetting` request
+path the page's `setSettings` command uses. It is range-checked before that,
+because anyone can POST there and the host's control validation is not in this
+path.
+
+## Device surface
+
+Separate from the dashboard surfaces above: the manifest declares one driver
+surface, `settings`, pointing at the control page's own endpoint. Device
+management consumes it through `PluginDeviceSurfaceAuthority` and opens the page
+against `localhost` for that device, without requiring a connection first. The
+plugin owns identity validation; ownership is never inferred from the device
+ID.
 
 ## Out of scope
 
-Grinding start and stop is **not implemented**. Bookoo's integration guide lists
+Grinding start and stop is **not declared**. Bookoo's integration guide lists
 BLE grinding start/stop control as under safety evaluation and outside the
-published SDK, so no framing for it is documented. Do not add a guessed frame
+published SDK, so no framing for it is documented. The driver therefore claims
+`grindSetting` and `rpmControl` only, and start/stop fails with
+`unsupported_operation` before any handler runs. Do not add a guessed frame
 here.
 
 ## Releasing
@@ -182,10 +268,10 @@ manifest disagree is rejected at install time.
 
 Exercised against a physical MT80. The plugin claims the advertisement and
 suppresses the native candidate, connect finds the Custom Service, subscribes,
-and reaches readiness on the first `periodInfo`, and all thirteen data channels
-stream at 5 Hz. `getSettings`, `getSections`, and `getPresets` returned the
-grinder's real configuration, including section and preset names in Chinese —
-which exercises the UTF-8 path across fragment boundaries on the wire.
+and reaches readiness once the first snapshot is accepted. `getSettings`,
+`getSections`, and `getPresets` returned the grinder's real configuration,
+including section and preset names in Chinese — which exercises the UTF-8 path
+across fragment boundaries on the wire.
 
 Writes were exercised against the same unit and restored afterwards. Writing
 the current settings back is accepted and echoed, and changing `brightness`
@@ -194,6 +280,13 @@ restored; a final field-by-field comparison against a pre-test backup matched
 exactly, the preset list was unchanged, and the recycle bin stayed empty.
 Preset add and delete are left untested on purpose — deletion leaves a tombstone
 the protocol offers no way to purge.
+
+The dashboard surfaces are covered by the plugin's own tests, which read the
+`skin` answer the way the skin reads it and drive the `rpm` endpoint through
+the same seam the web server uses. They have not been exercised against a
+running skin yet, and the surface limits — one hint and one line per tile, one
+header button overall — belong to the skin, so the plugin can only be as good
+as the slot it wins.
 
 The protocol follows Bookoo's published
 [open-scale-protocol](https://github.com/BooKooCode/OpenSource/tree/main/bookoo_motto80)
