@@ -399,6 +399,14 @@ void main() {
       'field': 'grinderSetting',
       'sizes': [10, 1],
     });
+
+    // The tile's own number is the workflow's, which is the profile's memory
+    // of a setting. This is the grinder's reading of where the burr actually
+    // is, for the skin to write back when it moves.
+    final sync = surfaceOf(surfaces, 'tile-sync');
+    expect(sync['tile'], 'grind');
+    expect(sync['value'], mt80PeriodInfo()['bladeGap']);
+    expect(sync['label'], 'MT80');
     await grinder.disconnect();
   });
 
@@ -641,6 +649,40 @@ void main() {
             as Map<String, dynamic>;
     expect((state['snapshot'] as Map)['bladeGap'], 420);
     await device.disconnect();
+  });
+
+  test('MT80 pushes when the burr moves, with nothing else changing', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager);
+    final pushes = <Map<String, dynamic>>[];
+    final subscription = manager.emitStream
+        .where((event) => event['event'] == 'changed')
+        .listen(pushes.add);
+    addTearDown(subscription.cancel);
+    final transport = BookooMt80PluginTransport('AA:BB');
+    final grinder = await connectMt80(
+      manager,
+      transport,
+      periodInfo: mt80PeriodInfo(bladeGap: 200),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    expect(pushes, hasLength(1));
+
+    // Someone turned the dial on the grinder. The state and the RPM are
+    // untouched, and this is exactly what a tile-sync surface exists to hear.
+    transport.emitBroadcast(mt80PeriodInfo(bladeGap: 210), sequence: 2);
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(pushes, hasLength(2));
+
+    transport.emitBroadcast(mt80PeriodInfo(bladeGap: 210), sequence: 3);
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(
+      pushes,
+      hasLength(2),
+      reason: 'a burr that did not move pushes nothing',
+    );
+    await grinder.disconnect();
   });
 
   test('MT80 advertisement without mt80 in the name is not claimed', () async {

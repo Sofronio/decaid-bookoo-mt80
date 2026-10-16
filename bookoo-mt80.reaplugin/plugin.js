@@ -384,8 +384,9 @@ function createPlugin(host) {
   // answer stays within the documented kinds. The status line states the burr
   // speed, which the Grind tile has no room for once it is showing the
   // setting, and carries the RPM control; the pill coarsens the grind step,
-  // which the device only takes whole. The buttons stay up with no device
-  // bound, because the page reports that state itself.
+  // which the device only takes whole; `tile-sync` hands the burr's own
+  // grind size to the tile. The buttons stay up with no device bound, because
+  // the page reports that state itself.
   function skinAnswer() {
     const surface = deviceHandler ? deviceHandler.surface() : null;
     const surfaces = [
@@ -404,6 +405,7 @@ function createPlugin(host) {
     ];
     if (surface) {
       const rpm = surface.rpm;
+      const setting = surface.setting;
       const line = {
         id: "mt80-state",
         kind: "tile-line",
@@ -438,6 +440,22 @@ function createPlugin(host) {
       // line carries the RPM control instead: a tap opens the skin's own
       // numpad, which calls the `rpm` endpoint.
       surfaces.push(line);
+      // The Grind tile's own number is the workflow's, which is the profile's
+      // memory of a setting and says nothing about where the burr actually is.
+      // `tile-sync` hands the grinder's own reading to the tile: when it
+      // changes, the skin writes it into the workflow as if the user had typed
+      // it, so the two agree again -- and a value typed afterwards stands
+      // until the burr moves again. A skin that does not know the kind yet
+      // ignores it and draws the rest.
+      if (Number.isFinite(setting)) {
+        surfaces.push({
+          id: "mt80-sync",
+          kind: "tile-sync",
+          tile: "grind",
+          value: setting,
+          label: "MT80",
+        });
+      }
       // No `text`: the skin writes the pill from the size the user picked on
       // this device, cycling between `±10` and `±1`. A `text` here would win
       // over that and freeze the pill on one label.
@@ -1037,7 +1055,11 @@ function createPlugin(host) {
           // skin answer tells "connected" from "grind tile only".
           function surfaceState() {
             if (!context || !snapshot) return null;
-            return { state: mappedState(), rpm: Number(snapshot.grindRpm) };
+            return {
+              state: mappedState(),
+              rpm: Number(snapshot.grindRpm),
+              setting: Number(snapshot.bladeGap),
+            };
           }
 
           // The skin holds the `changed` socket open and re-reads `skin` on
@@ -1053,9 +1075,12 @@ function createPlugin(host) {
           let skinSentAt = 0;
 
           function notifySkin() {
+            // bladeGap belongs in the key even though nothing draws it
+            // directly: the burr moving is the one thing `tile-sync` exists to
+            // hear, and it moves without the state or the RPM changing.
             const key =
               context && snapshot
-                ? `on|${snapshot.devState}|${snapshot.grindRpm}`
+                ? `on|${snapshot.devState}|${snapshot.grindRpm}|${snapshot.bladeGap}`
                 : "off";
             if (key === skinKey) return;
             skinKey = key;

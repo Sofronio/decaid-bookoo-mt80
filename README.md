@@ -208,6 +208,7 @@ offer:
 | --- | --- | --- | --- |
 | `mt80-state` | `tile-line` | under the Grind label | the burr speed, or `warning`; drawn switched on while grinding, and a tap opens the skin's numpad to set it |
 | `mt80-step` | `tile-hint` | the Grind tile's pill | a coarse/fine `±10` / `±1` step for the grind setting |
+| `mt80-sync` | `tile-sync` | the Grind tile's own value | the grinder's reading of the grind setting, written into the workflow when it moves |
 | `mt80-page` | `header-button` | the dashboard header | the control page |
 | `mt80-saver` | `screensaver-button` | over the screensaver | the control page |
 
@@ -227,6 +228,22 @@ bean. The line's `input` action reaches the same `rpm` endpoint.
 The pill carries no `text` of its own. The skin labels it from the size the
 user picked on that device, cycling `±10` and `±1`; a `text` in the answer takes
 precedence over that label and would freeze it.
+
+### The tile's number and the grinder's
+
+The Grind tile's number is the workflow's `context.grinderSetting` — the active
+profile's memory of a setting, which says nothing about where the burr actually
+is. The two drift apart the moment someone turns the dial on the grinder, and
+nothing reconciles them: no code in Decaid reads `GrinderSnapshot.setting`, and
+the only route that writes a grinder is `PUT /api/v1/grinder/setting`, which
+neither the app nor the skin calls.
+
+`tile-sync` closes that gap. While the value is drawn, the skin writes a
+*changed* value into the workflow as if the user had typed it, so the tile and
+the profile's memory follow the burr; a value typed afterwards stands until the
+burr moves again. The kind is newer than this plugin, and a skin that does not
+know it yet ignores it and draws everything else, so the surface can ship
+before the skin that acts on it.
 
 The buttons are drawn even with no device bound — the page reports "not
 connected" itself. The grind surfaces are not, because they would have nothing
