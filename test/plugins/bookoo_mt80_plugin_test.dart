@@ -312,9 +312,13 @@ void main() {
     final page = response['body'] as String;
     expect(page, contains('id="bladeGap"'));
     expect(page, contains('id="sliders"'));
+    expect(page, contains('class="app"'));
     expect(page, contains('id="back"'));
+    expect(page, contains('id="expand"'));
+    expect(page, contains('setExpanded'));
     expect(page, contains('streamline:ready'));
     expect(page, contains('streamline:close'));
+    expect(page, contains('streamline:size'));
     expect(page, contains('returnTo'));
   });
 
@@ -427,9 +431,9 @@ void main() {
     for (final surface in surfaces) {
       expect(surface['action'], {
         'type': 'open',
-        'view': 'main',
+        'view': 'settings',
         'presentation': 'overlay',
-        'size': 'full',
+        'fit': true,
       });
     }
   });

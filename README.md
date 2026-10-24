@@ -133,6 +133,18 @@ feed and grind RPM, a live status table, draggable sliders that send on a 250 ms
 debounce, boolean toggles, preset and section chips, and a per-kind send,
 response, and broadcast log. It toggles between English and Chinese.
 
+`?view=settings` renders the compact view the dashboard surfaces use: the
+read-only readout, status table and log are hidden, leaving the settings,
+presets and sections, and the page reports its content size to the skin. The
+device-management settings surface opens the full page.
+
+The compact window's header has a **Full / Compact** toggle. Full shows the
+read-only readout, status table and log and grows the dialog to the skin's
+maximum overlay size (1100×760, or 94%×90% of the screen); Compact returns to
+the fitted cards. A true edge-to-edge `size:"full"` overlay is fixed when the
+skin opens the page — the protocol has no message to switch an open overlay to
+full-screen — so Full uses the largest size an overlay may request.
+
 Its `POST` body is `{commandId, params}`:
 
 | Command | Purpose |
@@ -213,17 +225,18 @@ offer:
 | `mt80-state` | `tile-line` | under the Grind label | the burr speed, or `warning`; drawn switched on while grinding, and a tap opens the skin's numpad to set it |
 | `mt80-step` | `tile-hint` | the Grind tile's pill | a coarse/fine `±10` / `±1` step for the grind setting |
 | `mt80-sync` | `tile-sync` | the Grind tile's own value | the grinder's reading of the grind setting, written into the workflow when it moves |
-| `mt80-page` | `header-button` | the dashboard header | the control page |
-| `mt80-saver` | `screensaver-button` | over the screensaver | the control page |
+| `mt80-page` | `header-button` | the dashboard header | the settings window |
+| `mt80-saver` | `screensaver-button` | over the screensaver | the settings window |
 
-The two buttons open the page as a full-screen `overlay`, not as a same-frame
-`page`: the control page sits over the dashboard in the skin's dialog, and
-closing it returns to the dashboard as it was, with no navigation and no skin
-reload. The page posts `streamline:ready` when it loads and `streamline:close`
-from its back button; the skin draws its own close button too. If a skin falls
-back to a page open (no ready within three seconds), or the page is opened
-outside the skin, the back button uses the `returnTo` the surface protocol adds,
-so it still returns to where it came from.
+The two buttons open a settings-only view in a fitted `overlay`, not as a
+same-frame `page`: the window is sized to the editable cards (settings, presets
+and sections), the read-only live table and log are not drawn, and closing it
+returns to the dashboard as it was, with no navigation and no skin reload. The
+page posts `streamline:ready` when it loads and `streamline:size` with its
+content size, and `streamline:close` from its back button; the skin draws its
+own close button too. If a skin falls back to a page open (no ready within three
+seconds), or the page is opened outside the skin, the back button uses the
+`returnTo` the surface protocol adds, so it still returns to where it came from.
 
 The `ui` response sends `Content-Security-Policy: frame-ancestors 'self'
 <Origin/Referer origin>` because a skin served from another port — the tablet's
