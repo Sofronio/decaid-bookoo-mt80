@@ -439,34 +439,37 @@ function createPlugin(host) {
   // speed, which the Grind tile has no room for once it is showing the
   // setting, and carries the RPM control; the pill coarsens the grind step,
   // which the device only takes whole; `tile-sync` hands the burr's own
-  // grind size to the tile. The buttons stay up with no device bound, because
-  // the page reports that state itself. They open the settings-only view as a
-  // fitted overlay, so the window is sized to the editable cards and leaving
-  // it does not navigate the skin; if the skin falls back to a page open, the
-  // page's own back button uses `returnTo`.
+  // grind size to the tile. The buttons are only declared while a device is
+  // connected: a disconnected grinder leaves the skin's single header slot to
+  // the grinder that is connected, and the full page stays reachable from
+  // device management. They open the settings-only view as a fitted overlay,
+  // so the window is sized to the editable cards and leaving it does not
+  // navigate the skin; if the skin falls back to a page open, the page's own
+  // back button uses `returnTo`.
   function skinAnswer() {
     const surface = deviceHandler ? deviceHandler.surface() : null;
-    const pageAction = {
-      type: "open",
-      view: "settings",
-      presentation: "overlay",
-      fit: true,
-    };
-    const surfaces = [
-      {
-        id: "mt80-page",
-        kind: "header-button",
-        label: "MT80",
-        action: pageAction,
-      },
-      {
-        id: "mt80-saver",
-        kind: "screensaver-button",
-        label: "MT80",
-        action: pageAction,
-      },
-    ];
+    const surfaces = [];
     if (surface) {
+      const pageAction = {
+        type: "open",
+        view: "settings",
+        presentation: "overlay",
+        fit: true,
+      };
+      surfaces.push(
+        {
+          id: "mt80-page",
+          kind: "header-button",
+          label: "MT80",
+          action: pageAction,
+        },
+        {
+          id: "mt80-saver",
+          kind: "screensaver-button",
+          label: "MT80",
+          action: pageAction,
+        }
+      );
       const rpm = surface.rpm;
       const setting = surface.setting;
       const line = {

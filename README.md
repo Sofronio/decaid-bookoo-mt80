@@ -276,9 +276,11 @@ burr moves again. The kind is newer than this plugin, and a skin that does not
 know it yet ignores it and draws everything else, so the surface can ship
 before the skin that acts on it.
 
-The buttons are drawn even with no device bound — the page reports "not
-connected" itself. The grind surfaces are not, because they would have nothing
-to say.
+The buttons are declared only while a device is connected. The skin draws one
+header button overall, so a disconnected grinder leaves the slot to the grinder
+that is connected; its full page stays reachable from Decaid's device
+management, where it reports "not connected" itself. The grind surfaces follow
+the same rule.
 
 ### Keeping the skin in sync
 

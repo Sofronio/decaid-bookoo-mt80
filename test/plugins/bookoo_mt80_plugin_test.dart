@@ -417,25 +417,15 @@ void main() {
     expect(response['status'], 405);
   });
 
-  test('MT80 skin answer draws only the page buttons without a device', () async {
+  test('MT80 skin draws nothing without a connected device', () async {
     final manager = PluginManager(kvStore: FakeKeyValueStoreService());
     addTearDown(manager.dispose);
     await loadBookooMt80Plugin(manager);
     final surfaces = await skinSurfaces(manager);
-    // The page reports "not connected" itself, so its buttons stay up; the
-    // grind surfaces have nothing to say and are not drawn.
-    expect(surfaces.map((surface) => surface['kind']), [
-      'header-button',
-      'screensaver-button',
-    ]);
-    for (final surface in surfaces) {
-      expect(surface['action'], {
-        'type': 'open',
-        'view': 'settings',
-        'presentation': 'overlay',
-        'fit': true,
-      });
-    }
+    // A disconnected grinder leaves the skin's single header slot to the
+    // grinder that is connected; its own page is still reachable from device
+    // management.
+    expect(surfaces, isEmpty);
   });
 
   test('MT80 skin draws the grind surfaces from the live snapshot', () async {
