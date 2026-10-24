@@ -53,6 +53,7 @@ Future<Map<String, dynamic>> pluginHttp(
   String endpoint = 'ui',
   String method = 'GET',
   Map<String, String> query = const {},
+  Map<String, String> headers = const {},
   Object? body,
 }) async {
   final requestId = 'req-${DateTime.now().microsecondsSinceEpoch}';
@@ -64,7 +65,7 @@ Future<Map<String, dynamic>> pluginHttp(
     'requestId': requestId,
     'endpoint': endpoint,
     'method': method,
-    'headers': <String, String>{},
+    'headers': headers,
     'body': body,
     'query': query,
   });
@@ -193,6 +194,41 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 80));
       expect((await grinder.currentSnapshot.first).state, GrinderState.unknown);
+      transport.emitBroadcast(
+        mt80PeriodInfo(devState: 'BOOTGUIDE'),
+        sequence: 3,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect((await grinder.currentSnapshot.first).state, GrinderState.unknown);
+      await grinder.disconnect();
+    },
+  );
+
+  test(
+    'MT80 accepts both clean-state spellings and the new purge state',
+    () async {
+      final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+      addTearDown(manager.dispose);
+      await loadBookooMt80Plugin(manager);
+      final transport = BookooMt80PluginTransport('AA:BB');
+      final grinder = await connectMt80(
+        manager,
+        transport,
+        periodInfo: mt80PeriodInfo(devState: 'HighSpeedClean'),
+      );
+      expect((await grinder.currentSnapshot.first).state, GrinderState.grinding);
+      transport.emitBroadcast(
+        mt80PeriodInfo(devState: 'HIGHSPEEDCLEAN'),
+        sequence: 2,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect((await grinder.currentSnapshot.first).state, GrinderState.grinding);
+      transport.emitBroadcast(
+        mt80PeriodInfo(devState: 'ADJUSTMENTPURGE'),
+        sequence: 3,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect((await grinder.currentSnapshot.first).state, GrinderState.grinding);
       await grinder.disconnect();
     },
   );
@@ -269,9 +305,48 @@ void main() {
     final response = await pluginHttp(manager);
     expect(response['status'], 200);
     expect(response['headers']['Content-Type'], contains('text/html'));
+    expect(
+      response['headers']['Content-Security-Policy'],
+      "frame-ancestors 'self'",
+    );
     final page = response['body'] as String;
     expect(page, contains('id="bladeGap"'));
     expect(page, contains('id="sliders"'));
+    expect(page, contains('id="back"'));
+    expect(page, contains('streamline:ready'));
+    expect(page, contains('streamline:close'));
+    expect(page, contains('returnTo'));
+  });
+
+  test('MT80 control page lets the skin on its own port frame it', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(manager);
+    final fromReferer = await pluginHttp(
+      manager,
+      headers: {'referer': 'http://localhost:25123/settings'},
+    );
+    expect(
+      fromReferer['headers']['Content-Security-Policy'],
+      "frame-ancestors 'self' http://localhost:25123",
+    );
+    final fromOrigin = await pluginHttp(
+      manager,
+      headers: {'origin': 'http://192.168.1.225:25123'},
+    );
+    expect(
+      fromOrigin['headers']['Content-Security-Policy'],
+      "frame-ancestors 'self' http://192.168.1.225:25123",
+    );
+    // Anything that is not an http(s) origin is not echoed into the header.
+    final bogus = await pluginHttp(
+      manager,
+      headers: {'origin': 'javascript:alert(1)'},
+    );
+    expect(
+      bogus['headers']['Content-Security-Policy'],
+      "frame-ancestors 'self'",
+    );
   });
 
   test(
@@ -350,7 +425,12 @@ void main() {
       'screensaver-button',
     ]);
     for (final surface in surfaces) {
-      expect(surface['action'], {'type': 'open', 'view': 'main'});
+      expect(surface['action'], {
+        'type': 'open',
+        'view': 'main',
+        'presentation': 'overlay',
+        'size': 'full',
+      });
     }
   });
 

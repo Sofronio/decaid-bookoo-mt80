@@ -203,6 +203,7 @@ function createPlugin(host) {
       'h1{font-size:16px;margin:0;font-weight:600}',
       '.dot{width:8px;height:8px;border-radius:50%;background:#ef4444}.dot.on{background:var(--accent)}',
       '#conn{color:var(--muted);font-size:12px}',
+      '#back[hidden]{display:none}body.embedded header{padding-right:64px}',
       'button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;',
       'padding:6px 10px;font:inherit;cursor:pointer}button:hover{border-color:#3f3f4a}',
       'main{padding:16px 20px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start}',
@@ -233,7 +234,8 @@ function createPlugin(host) {
       '.log span{word-break:break-all;color:#c9c9d1}',
       '.note{color:var(--muted);font-size:12px;margin-top:8px}',
       '</style></head><body>',
-      '<header><h1>Bookoo MT80</h1><span class="dot" id="dot"></span>',
+      '<header><button id="back" hidden>Back</button>',
+      '<h1>Bookoo MT80</h1><span class="dot" id="dot"></span>',
       '<span id="conn">--</span>',
       '<span style="flex:1"></span>',
       '<button id="lang">English</button></header>',
@@ -252,26 +254,44 @@ function createPlugin(host) {
       '<section class="card"><h2>Logs</h2><div id="logs"></div></section>',
       '</main><script>',
       'var ENDPOINT=location.pathname;',
+      'var PARAMS=new URLSearchParams(location.search);',
+      'var EMBEDDED=PARAMS.get("embed")==="1";',
+      'var RETURN_TO="";',
+      'if(!EMBEDDED){try{var r=new URL(PARAMS.get("returnTo")||"");',
+      'if(/^https?:$/.test(r.protocol)&&!r.username&&!r.password)RETURN_TO=r.href}catch(e){}}',
+      'var FROM_SKIN=EMBEDDED||!!RETURN_TO;',
       'var LANG="zh";',
-      'var T={zh:{live:"\\u5b9e\\u65f6\\u72b6\\u6001",settings:"\\u5b9e\\u65f6\\u8bbe\\u7f6e",presets:"\\u9884\\u8bbe",sections:"\\u7814\\u78e8\\u6bb5",',
+      'var T={zh:{back:"\\u8fd4\\u56de",live:"\\u5b9e\\u65f6\\u72b6\\u6001",settings:"\\u5b9e\\u65f6\\u8bbe\\u7f6e",presets:"\\u9884\\u8bbe",sections:"\\u7814\\u78e8\\u6bb5",',
       'connected:"\\u5df2\\u8fde\\u63a5",offline:"\\u672a\\u8fde\\u63a5",drag:"\\u6ed1\\u5757\\u62d6\\u52a8\\u5373\\u53d1\\u9001",',
       'cumulative:"\\u7d2f\\u8ba1\\u7814\\u78e8",humidity:"\\u6e7f\\u5ea6",network:"\\u7f51\\u7edc",serial:"\\u5e8f\\u5217\\u53f7",',
       'sectionNote:"\\u70b9\\u51fb\\u5206\\u6bb5\\u53ea\\u5199\\u5165\\u5bf9\\u5e94\\u7684\\u7814\\u78e8\\u5ea6\\u6570\\u503c\\uff0c\\u4e0d\\u4f1a\\u6539\\u53d8\\u7269\\u7406\\u5200\\u76d8\\u95f4\\u8ddd\\u3002"},',
-      'en:{live:"Live",settings:"Settings",presets:"Presets",sections:"Sections",connected:"Connected",',
+      'en:{back:"Back",live:"Live",settings:"Settings",presets:"Presets",sections:"Sections",connected:"Connected",',
       'offline:"Not connected",drag:"drag to send",cumulative:"Total grinds",humidity:"Humidity",',
       'network:"Network",serial:"Serial",sectionNote:"A section click only writes that grind-size value; it does not move the physical burr."}};',
       'var LABEL={feedingRpm:["Feed RPM","\\u4e0b\\u8c46\\u901f\\u5ea6"],grindRpm:["Grind RPM","\\u5200\\u76d8\\u8f6c\\u901f"],',
       'bladeGap:["Grind size","\\u7814\\u78e8\\u5ea6"],brightness:["Brightness","\\u4eae\\u5ea6"],standbySec:["Standby","\\u7184\\u5c4f\\u79d2"],',
       'cupDetect:["Cup detect","\\u676f\\u68c0"],autoStop:["Auto stop","\\u81ea\\u52a8\\u505c\\u6b62"],fastClean:["Fast clean","\\u5f3a\\u529b\\u6e05\\u7c89"],',
       'devState:["State","\\u72b6\\u6001"],netState:["Network","\\u7f51\\u7edc"],totalGrinds:["Total grinds","\\u7d2f\\u8ba1\\u7814\\u78e8"]};',
-      'var STATE={IDLE:["Idle","\\u5f85\\u673a\\u4e2d"],GRINDING:["Grinding","\\u7814\\u78e8\\u4e2d"],',
-      'HighSpeedClean:["High-speed clean","\\u9ad8\\u8f6c\\u6392\\u7c89"],SETTING:["Setting","\\u8bbe\\u7f6e\\u4e2d"]};',
+      'var STATE={IDLE:["Idle","\\u5f85\\u673a\\u4e2d"],GRINDING:["Grinding","\\u7814\\u78e8\\u4e2d"],WARNING:["Warning","\\u544a\\u8b66\\u4e2d"],',
+      'SETTING:["Setting","\\u8bbe\\u7f6e\\u4e2d"],UPDATING:["Updating","\\u8bbe\\u5907\\u66f4\\u65b0\\u4e2d"],',
+      'HIGHSPEEDCLEAN:["High-speed clean","\\u9ad8\\u8f6c\\u6392\\u7c89"],BOOTGUIDE:["Startup guide","\\u5f00\\u673a\\u5f15\\u5bfc\\u4e2d"],',
+      'ADJUSTMENTPURGE:["Adjustment purge","\\u8c03\\u78e8\\u6e05\\u7c89\\u4e2d"]};',
       // Official geneSetting ranges; the device rejects anything outside them.
       'var RANGES={feedingRpm:[10,65,1],grindRpm:[500,1500,10],bladeGap:[0,999,1],brightness:[1,5,1],standbySec:[60,900,10]};',
       'var BOOLS=["cupDetect","autoStop","fastClean"];',
       'var slidersBuilt=false;var last={};var deb={};var cached={snapshot:null,presets:[],sections:[]};',
       'function t(k){return T[LANG][k]}',
       'function label(k){var e=LABEL[k];return e?(LANG==="zh"?e[1]:e[0]):k}',
+      'function stateLabel(v){var e=STATE[String(v||"").toUpperCase()];return e?(LANG==="zh"?e[1]:e[0]):v}',
+      'function backToSkin(){',
+      'if(RETURN_TO){var came=false;',
+      'try{came=history.length>1&&new URL(document.referrer).origin===new URL(RETURN_TO).origin}catch(e){}',
+      'if(!came){location.assign(RETURN_TO);return}',
+      'var fallback=setTimeout(function(){location.assign(RETURN_TO)},1500);',
+      'addEventListener("pagehide",function(){clearTimeout(fallback)},{once:true});',
+      'history.back();return}',
+      'if(EMBEDDED){try{window.parent.postMessage({type:"streamline:close"},"*")}catch(e){}return}',
+      'history.back()}',
       'function post(commandId,params){return fetch(ENDPOINT,{method:"POST",headers:{"Content-Type":"application/json"},',
       'body:JSON.stringify({commandId:commandId,params:params||{}})}).then(function(r){return r.json()}).then(function(r){',
       'if(!r.ok)throw new Error(r.error);return r.result})}',
@@ -311,7 +331,7 @@ function createPlugin(host) {
       'b.addEventListener("click",function(){post("setSettings",{bladeGap:s.range[0]}).catch(function(e){console.warn(e)})});',
       'host.appendChild(b)})}',
       'function paintStatus(s,connected){var rows=[',
-      '[label("devState"),s?(STATE[s.devState]?(LANG==="zh"?STATE[s.devState][1]:STATE[s.devState][0]):s.devState):"\\u2014"],',
+      '[label("devState"),s?stateLabel(s.devState):"\\u2014"],',
       '[label("humidity"),(s&&s.humidity!=null?s.humidity+" %RH":"\\u2014")],',
       '[label("totalGrinds"),(s&&s.totalGrinds!=null?s.totalGrinds:"\\u2014")],',
       '[label("netState"),(s&&s.netState?s.netState:"\\u2014")],',
@@ -326,10 +346,11 @@ function createPlugin(host) {
       'document.getElementById("dot").className="dot"+(c?" on":"");',
       'document.getElementById("conn").textContent=c?t("connected"):t("offline");',
       'document.getElementById("bladeGap").textContent=s&&s.bladeGap!=null?s.bladeGap:"--";',
-      'document.getElementById("state").textContent=s&&s.devState?(STATE[s.devState]?(LANG==="zh"?STATE[s.devState][1]:STATE[s.devState][0]):s.devState):"--";',
+      'document.getElementById("state").textContent=s&&s.devState?stateLabel(s.devState):"--";',
       'document.getElementById("rpm").innerHTML=s?\'<b>\'+s.feedingRpm+\'</b> feed &middot; <b>\'+s.grindRpm+\'</b> grind &middot; <b>\'+s.humidity+\'</b> %RH\':"";',
       'paintStatus(s,c);paintSettings(s||{});paintLogs(d.logs||[])}',
-      'function labels(){document.getElementById("h-status").textContent=t("live");',
+      'function labels(){document.getElementById("back").textContent=t("back");',
+      'document.getElementById("h-status").textContent=t("live");',
       'document.getElementById("h-set").textContent=t("settings")+" ("+t("drag")+")";',
       'document.getElementById("h-preset").textContent=t("presets");',
       'document.getElementById("h-section").textContent=t("sections");',
@@ -344,6 +365,10 @@ function createPlugin(host) {
       'paintPresets(cached.presets,(cached.snapshot||{}).selectPreset)}).catch(function(){}).then(function(){',
       'return post("getSections")}).then(function(r){cached.sections=r.sections||[];',
       'paintSections(cached.sections)}).catch(function(){})}',
+      'var backBtn=document.getElementById("back");backBtn.hidden=!FROM_SKIN;',
+      'backBtn.addEventListener("click",backToSkin);',
+      'if(EMBEDDED){document.body.classList.add("embedded");',
+      'try{window.parent.postMessage({type:"streamline:ready"},"*")}catch(e){}}',
       'labels();buildSliders();tick();loadLists();setInterval(tick,500);setInterval(loadLists,15000);',
       '</script></body></html>',
     ].join("");
@@ -368,11 +393,14 @@ function createPlugin(host) {
 
   // The device state vocabulary is its own; only these four reach the host.
   // Anything else is honestly unknown rather than guessed. The simulated
-  // device speaks it too, so both paths map alike.
+  // device speaks it too, so both paths map alike. Firmware v1.3.11.1020
+  // renamed HighSpeedClean to HIGHSPEEDCLEAN and added ADJUSTMENTPURGE;
+  // the lookup is case-insensitive so both firmware spellings map the same.
   const grinderStates = {
     IDLE: "idle",
     GRINDING: "grinding",
     HIGHSPEEDCLEAN: "grinding",
+    ADJUSTMENTPURGE: "grinding",
     WARNING: "error",
   };
 
@@ -386,21 +414,29 @@ function createPlugin(host) {
   // setting, and carries the RPM control; the pill coarsens the grind step,
   // which the device only takes whole; `tile-sync` hands the burr's own
   // grind size to the tile. The buttons stay up with no device bound, because
-  // the page reports that state itself.
+  // the page reports that state itself. They open the page as a full-screen
+  // overlay so leaving it does not navigate the skin and reload it; if the
+  // skin falls back to a page open, the page's own back button uses `returnTo`.
   function skinAnswer() {
     const surface = deviceHandler ? deviceHandler.surface() : null;
+    const pageAction = {
+      type: "open",
+      view: "main",
+      presentation: "overlay",
+      size: "full",
+    };
     const surfaces = [
       {
         id: "mt80-page",
         kind: "header-button",
         label: "MT80",
-        action: { type: "open", view: "main" },
+        action: pageAction,
       },
       {
         id: "mt80-saver",
         kind: "screensaver-button",
         label: "MT80",
-        action: { type: "open", view: "main" },
+        action: pageAction,
       },
     ];
     if (surface) {
@@ -658,6 +694,16 @@ function createPlugin(host) {
     );
   }
 
+  // Decaid serves plugin pages with `X-Frame-Options: SAMEORIGIN`, but the
+  // tablet's skin runs on another port (:25123). A CSP frame-ancestors source
+  // lets that skin embed the page and takes precedence over X-Frame-Options.
+  // Only an http(s) origin from Origin/Referer is echoed back.
+  function frameOrigin(value) {
+    if (typeof value !== "string") return "";
+    const match = /^(https?:\/\/[^/?#\s@]+)/i.exec(value);
+    return match ? match[1] : "";
+  }
+
   return {
     id: "bookoo-mt80.reaplugin",
     handleHttpRequest(request) {
@@ -715,9 +761,16 @@ function createPlugin(host) {
         }
         // The page is device-independent, so it renders before anything binds
         // and simply reports "not connected".
+        const requestHeaders = request.headers || {};
+        const ancestor =
+          frameOrigin(requestHeaders.origin || requestHeaders.Origin) ||
+          frameOrigin(requestHeaders.referer || requestHeaders.Referer);
+        const pageHeaders = { "Content-Type": "text/html; charset=utf-8" };
+        pageHeaders["Content-Security-Policy"] =
+          "frame-ancestors 'self'" + (ancestor ? " " + ancestor : "");
         return {
           status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: pageHeaders,
           body: renderUi(),
         };
       }

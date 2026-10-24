@@ -80,12 +80,16 @@ The driver publishes `{state, setting, rpm}`:
 
 | Field | Source in `periodInfo` | Mapping |
 | --- | --- | --- |
-| `state` | `devState` | `IDLE` → `idle`, `GRINDING` and `HighSpeedClean` → `grinding`, `WARNING` → `error`, anything else → `unknown` |
+| `state` | `devState` | `IDLE` → `idle`; `GRINDING`, `HIGHSPEEDCLEAN` and `ADJUSTMENTPURGE` → `grinding`; `WARNING` → `error`; anything else → `unknown` |
 | `setting` | `bladeGap` | string, requires `grindSetting` |
 | `rpm` | `grindRpm` | integer, requires `rpmControl` |
 
 The device vocabulary is its own; only these four states reach the host, and
-anything unrecognised is reported as `unknown` rather than guessed.
+anything unrecognised is reported as `unknown` rather than guessed. The lookup
+ignores case and covers both firmware eras: `HighSpeedClean` became
+`HIGHSPEEDCLEAN` in firmware `v1.3.11.1020`, which also added
+`ADJUSTMENTPURGE` (grind adjustment and grounds purge). Both purging states
+reach the host as `grinding`.
 
 **Readiness is the publication, not the arrival.** The host requires a valid
 initial snapshot before the grinder is usable, so `connect` resolves only after
@@ -212,6 +216,20 @@ offer:
 | `mt80-page` | `header-button` | the dashboard header | the control page |
 | `mt80-saver` | `screensaver-button` | over the screensaver | the control page |
 
+The two buttons open the page as a full-screen `overlay`, not as a same-frame
+`page`: the control page sits over the dashboard in the skin's dialog, and
+closing it returns to the dashboard as it was, with no navigation and no skin
+reload. The page posts `streamline:ready` when it loads and `streamline:close`
+from its back button; the skin draws its own close button too. If a skin falls
+back to a page open (no ready within three seconds), or the page is opened
+outside the skin, the back button uses the `returnTo` the surface protocol adds,
+so it still returns to where it came from.
+
+The `ui` response sends `Content-Security-Policy: frame-ancestors 'self'
+<Origin/Referer origin>` because a skin served from another port — the tablet's
+is `:25123` — would otherwise be refused by Decaid's `X-Frame-Options:
+SAMEORIGIN` on the overlay's iframe.
+
 The line is where `rpmControl` lives, because the grinder snapshot carries one
 number and the tile spends it on the setting. It is a `line` and not a `hint`
 because a hint shares its slot with the pill, and the skin draws one of each per
@@ -337,7 +355,8 @@ from this repository's tests alone — they need a Decaid checkout.
 
 The protocol follows Bookoo's published
 [open-scale-protocol](https://github.com/BooKooCode/OpenSource/tree/main/bookoo_motto80)
-MT80 BLE GATT SDK (minimum firmware `v1.2.19.0820`).
+MT80 BLE GATT SDK (minimum firmware `v1.2.19.0820`; state names follow the
+`devState` table updated for firmware `v1.3.11.1020`).
 
 ## License
 
