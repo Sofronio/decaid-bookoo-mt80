@@ -1,11 +1,19 @@
 # Bookoo MT80 (MOTTO80) for Decaid
 
+[简体中文](https://github.com/Sofronio/decaid-bookoo-mt80/blob/main/README.zh-CN.md) | **English**
+
 A [Decaid](https://github.com/decentespresso/decaid) plugin that adds the Bookoo
 MT80 grinder (sold as MOTTO80). The plugin owns the device protocol; Decaid
 owns discovery, the BLE connection lifecycle, and the device surface.
 
 No Decaid release is needed to use this, and none is needed to add support for
 another device.
+
+## Screenshots
+
+![Compact settings window (English)](https://github.com/Sofronio/decaid-bookoo-mt80/releases/download/v0.2.7/mt80-compact-en-20261024-120620.png)
+
+![Full settings window (English)](https://github.com/Sofronio/decaid-bookoo-mt80/releases/download/v0.2.7/mt80-full-en-20261024-120626.png)
 
 ## Driver type
 
@@ -27,7 +35,8 @@ curl -X POST http://localhost:8080/api/v1/plugins/install/github-release \
   -d '{"repo": "Sofronio/decaid-bookoo-mt80"}'
 ```
 
-Or open the Plugins settings screen in Decaid and install from the repository.
+Or open the Plugins settings screen in Decaid and enter
+`Sofronio/decaid-bookoo-mt80` directly.
 
 The public device ID is
 `plugin:bookoo-mt80.reaplugin:mt80:<physical id>`. When the plugin is loaded it
