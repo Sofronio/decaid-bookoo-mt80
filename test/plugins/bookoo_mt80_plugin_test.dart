@@ -109,6 +109,13 @@ void main() {
     expect(driver.ble!.nameValue, 'mt80');
   });
 
+  test('MT80 manifest exposes the Streamline button setting', () {
+    final setting =
+        bookooMt80Manifest().settings['showButtons'] as Map<String, dynamic>;
+    expect(setting['type'], 'boolean');
+    expect(setting['default'], true);
+  });
+
   test('MT80 exposes its control page as the settings surface', () {
     final driver = bookooMt80Manifest().drivers.single;
     expect(driver.surfaces.single.id, 'settings');
@@ -438,6 +445,10 @@ void main() {
     final surfaces = await skinSurfaces(manager);
     expect(transport.writes, isEmpty);
 
+    // The buttons are on by default; the next test turns them off.
+    expect(surfaceOf(surfaces, 'header-button')['label'], 'MT80');
+    expect(surfaceOf(surfaces, 'screensaver-button')['label'], 'MT80');
+
     final line = surfaceOf(surfaces, 'tile-line');
     expect(line['tile'], 'grind');
     expect(line['text'], 'MT80 · ${mt80PeriodInfo()['grindRpm']} rpm');
@@ -481,6 +492,31 @@ void main() {
     expect(sync['tile'], 'grind');
     expect(sync['value'], mt80PeriodInfo()['bladeGap']);
     expect(sync['label'], 'MT80');
+    await grinder.disconnect();
+  });
+
+  test('MT80 skin hides its Streamline buttons when asked', () async {
+    final manager = PluginManager(kvStore: FakeKeyValueStoreService());
+    addTearDown(manager.dispose);
+    await loadBookooMt80Plugin(
+      manager,
+      settings: const {'showButtons': false},
+    );
+    final transport = BookooMt80PluginTransport('AA:BB');
+    final grinder = await connectMt80(manager, transport);
+    final surfaces = await skinSurfaces(manager);
+    expect(
+      surfaces.where(
+        (surface) =>
+            surface['kind'] == 'header-button' ||
+            surface['kind'] == 'screensaver-button',
+      ),
+      isEmpty,
+    );
+    // The setting only covers the buttons; the Grind tile surfaces stay.
+    expect(surfaceOf(surfaces, 'tile-line')['tile'], 'grind');
+    expect(surfaceOf(surfaces, 'tile-hint')['tile'], 'grind');
+    expect(surfaceOf(surfaces, 'tile-sync')['tile'], 'grind');
     await grinder.disconnect();
   });
 

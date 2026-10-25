@@ -406,6 +406,7 @@ function createPlugin(host) {
   let bleHandler = null; // the driver, once an MT80 binds
   let simulatedHandler = null; // the simulator, when the setting asked for it
   let deviceHandler = null; // what the HTTP endpoints and the surfaces serve
+  let showButtons = true; // the skin's header and screensaver buttons
 
   // A connected grinder wins; otherwise the simulator serves, so the control
   // page and the dashboard surfaces work with no hardware at all.
@@ -440,9 +441,10 @@ function createPlugin(host) {
   // setting, and carries the RPM control; the pill coarsens the grind step,
   // which the device only takes whole; `tile-sync` hands the burr's own
   // grind size to the tile. The buttons are only declared while a device is
-  // connected: a disconnected grinder leaves the skin's single header slot to
-  // the grinder that is connected, and the full page stays reachable from
-  // device management. They open the settings-only view as a fitted overlay,
+  // connected and the `showButtons` setting is on: a disconnected grinder
+  // leaves the skin's single header slot to the grinder that is connected,
+  // and the full page stays reachable from device management. They open the
+  // settings-only view as a fitted overlay,
   // so the window is sized to the editable cards and leaving it does not
   // navigate the skin; if the skin falls back to a page open, the page's own
   // back button uses `returnTo`.
@@ -456,20 +458,22 @@ function createPlugin(host) {
         presentation: "overlay",
         fit: true,
       };
-      surfaces.push(
-        {
-          id: "mt80-page",
-          kind: "header-button",
-          label: "MT80",
-          action: pageAction,
-        },
-        {
-          id: "mt80-saver",
-          kind: "screensaver-button",
-          label: "MT80",
-          action: pageAction,
-        }
-      );
+      if (showButtons) {
+        surfaces.push(
+          {
+            id: "mt80-page",
+            kind: "header-button",
+            label: "MT80",
+            action: pageAction,
+          },
+          {
+            id: "mt80-saver",
+            kind: "screensaver-button",
+            label: "MT80",
+            action: pageAction,
+          }
+        );
+      }
       const rpm = surface.rpm;
       const setting = surface.setting;
       const line = {
@@ -815,6 +819,9 @@ function createPlugin(host) {
       return json({ ok: false, error: "method not allowed" }, 405);
     },
     onLoad(settings) {
+      // A skin has one header slot, and the user may rather leave it to
+      // another grinder. Settings are read when the plugin loads.
+      showButtons = !settings || settings.showButtons !== false;
       const binding = host.devices.bindDriver("mt80", {
         create(device) {
           let context = null;

@@ -291,6 +291,10 @@ that is connected; its full page stays reachable from Decaid's device
 management, where it reports "not connected" itself. The grind surfaces follow
 the same rule.
 
+A `showButtons` plugin setting, on by default, turns both buttons off and
+leaves the Grind tile surfaces alone. It is for a user who would rather keep
+the skin's single header slot for another grinder.
+
 ### Keeping the skin in sync
 
 `live` in the same answer names the `changed` websocket. The skin holds it open

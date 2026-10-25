@@ -239,6 +239,9 @@ surface 可以先于会响应它的皮肤发布。
 已连接的磨豆机；它的完整页面仍可从 Decaid 设备管理打开，页面自己会报告“未连接”。
 grind surfaces 遵循同样的规则。
 
+`showButtons` 插件设置（默认开启）可以完全关掉这两个按钮，Grind tile 上的 surface
+不受影响；适合想把皮肤唯一的 header 槽留给另一台磨豆机的时候。
+
 ### 保持皮肤同步
 
 回答里的 `live` 指向 `changed` websocket。皮肤保持它打开，并在每条消息时重新读取
